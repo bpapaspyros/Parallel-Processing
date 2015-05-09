@@ -4,16 +4,16 @@ OBJS   := particles.o cellpool.o
 CXX := g++
 #CXX := scorep g++
 
-CXXFLAGS := -O3
-#CXXFLAGS := -O3 -fopenmp
+# CXXFLAGS := -O3
+CXXFLAGS := -O3 -fopenmp
 #CXXFLAGS := -g3
-CXXFLAGS := $(CXXFLAGS) -Wall -W -Wmissing-declarations -Wredundant-decls -Wdisabled-optimization
+CXXFLAGS := $(CXXFLAGS) -Wall -W -Wmissing-declarations -Wredundant-decls -Wdisabled-optimization -Wextra
 CXXFLAGS := $(CXXFLAGS) -Winline -Wpointer-arith -Wsign-compare -Wendif-labels
 
 # To enable visualization comment out the following lines (don't do this for benchmarking)
-#OBJS     += view.o
-#CXXFLAGS += -DENABLE_VISUALIZATION
-#LIBS     += -lGLU -lGL -lglut
+# OBJS     += view.o
+# CXXFLAGS += -DENABLE_VISUALIZATION
+# LIBS     += -lGLU -lGL -lglut
 
 all: particles compare
 

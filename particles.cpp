@@ -11,6 +11,7 @@
 
 #include "particles.hpp"
 #include "cellpool.hpp"
+#include <omp.h>
 
 #ifdef ENABLE_VISUALIZATION
 #include "view.hpp"
@@ -51,14 +52,24 @@ Cell *cells2 = NULL;
 int *cnumPars = 0;
 int *cnumPars2 = 0;
 Cell **last_cells = NULL; //helper array with pointers to last cell structure of "cells" array lists
+
 #ifdef ENABLE_VISUALIZATION
 Vec3 vMax(0.0,0.0,0.0);
 Vec3 vMin(0.0,0.0,0.0);
 #endif
-////////////////////////////////////////////////////////////////////////////////
 
+////////////////////////////////////////////////////////////////////////////////
+/**
+ * @brief Initializing the simulation's variables paying attention to the cache 
+ * line's size depending on the system we are runnning on. The variables of the
+ * simulation are initialized according to the given input file
+ *
+ * @param char const filename (input file with simulation parameters) 
+ */
 void InitSim(char const *fileName)
 {
+
+  // attempting to load the file
   std::cout << "Loading file \"" << fileName << "\"..." << std::endl;
   std::ifstream file(fileName, std::ios::binary);
   if(!file) {
@@ -66,7 +77,8 @@ void InitSim(char const *fileName)
     exit(1);
   }
 
-  //Always use single precision float variables b/c file format uses single precision
+  // Always use single precision float variables b/c file format uses single precision
+  // reading through the file's parameters paying attention to their memory organization
   float restParticlesPerMeter_le;
   int numParticles_le;
   file.read((char *)&restParticlesPerMeter_le, FILE_SIZE_FLOAT);
@@ -78,11 +90,14 @@ void InitSim(char const *fileName)
     restParticlesPerMeter = restParticlesPerMeter_le;
     numParticles          = numParticles_le;
   }
+
+  // initializing the the pool with cells
   cellpool_init(&pool, numParticles);
 
   h = kernelRadiusMultiplier / restParticlesPerMeter;
   hSq = h*h;
 
+  // begin initializations doing it single threaded
   float coeff1 = 315.0 / (64.0*pi*powf(h,9.0));
   float coeff2 = 15.0 / (pi*powf(h,6.0));
   float coeff3 = 45.0 / (pi*powf(h,6.0));
@@ -103,11 +118,14 @@ void InitSim(char const *fileName)
   delta.z = range.z / nz;
   assert(delta.x >= h && delta.y >= h && delta.z >= h);
 
-  //make sure Cell structure is multiple of estiamted cache line size
+  /* making some cache adjustments to increace the hit ratio */
+  // make sure Cell structure is multiple of estiamted cache line size
   assert(sizeof(Cell) % CACHELINE_SIZE == 0);
-  //make sure helper Cell structure is in sync with real Cell structure
+  
+  // make sure helper Cell structure is in sync with real Cell structure
   assert(offsetof(struct Cell_aux, padding) == offsetof(struct Cell, padding));
 
+  // system aware allocations
 #if defined(WIN32)
   cells = (struct Cell*)_aligned_malloc(sizeof(struct Cell) * numCells, CACHELINE_SIZE);
   cells2 = (struct Cell*)_aligned_malloc(sizeof(struct Cell) * numCells, CACHELINE_SIZE);
@@ -126,85 +144,107 @@ void InitSim(char const *fileName)
 
   // because cells and cells2 are not allocated via new
   // we construct them here
-  for(int i=0; i<numCells; ++i)
-  {
-	  new (&cells[i]) Cell;
-	  new (&cells2[i]) Cell;
+    // running the loop parallely
+    // each thread creates approximately equal number of cells
+    // unless it the size is small enough to run single threaded
+  if (numCells > 12000) {
+    #pragma omp parallel for schedule(static)
+    for(int i=0; i<numCells; ++i)
+    {
+      new (&cells[i]) Cell;
+      new (&cells2[i]) Cell;
+    }
+  } else {
+    for(int i=0; i<numCells; ++i)
+    {
+      new (&cells[i]) Cell;
+      new (&cells2[i]) Cell;
+    }
   }
 
+  // setting the array elements to zero
   memset(cnumPars, 0, numCells*sizeof(int));
 
-  //Always use single precision float variables b/c file format uses single precision
+  // Always use single precision float variables b/c file format uses single precision
   float px, py, pz, hvx, hvy, hvz, vx, vy, vz;
+
+  // parsing the file data  
   for(int i = 0; i < numParticles; ++i)
   {
-    file.read((char *)&px, FILE_SIZE_FLOAT);
-    file.read((char *)&py, FILE_SIZE_FLOAT);
-    file.read((char *)&pz, FILE_SIZE_FLOAT);
-    file.read((char *)&hvx, FILE_SIZE_FLOAT);
-    file.read((char *)&hvy, FILE_SIZE_FLOAT);
-    file.read((char *)&hvz, FILE_SIZE_FLOAT);
-    file.read((char *)&vx, FILE_SIZE_FLOAT);
-    file.read((char *)&vy, FILE_SIZE_FLOAT);
-    file.read((char *)&vz, FILE_SIZE_FLOAT);
-    if(!isLittleEndian()) {
-      px  = bswap_float(px);
-      py  = bswap_float(py);
-      pz  = bswap_float(pz);
-      hvx = bswap_float(hvx);
-      hvy = bswap_float(hvy);
-      hvz = bswap_float(hvz);
-      vx  = bswap_float(vx);
-      vy  = bswap_float(vy);
-      vz  = bswap_float(vz);
-    }
-    int ci = (int)(((float)px - domainMin.x) / delta.x);
-    int cj = (int)(((float)py - domainMin.y) / delta.y);
-    int ck = (int)(((float)pz - domainMin.z) / delta.z);
+      file.read((char *)&px, FILE_SIZE_FLOAT);
+      file.read((char *)&py, FILE_SIZE_FLOAT);
+      file.read((char *)&pz, FILE_SIZE_FLOAT);
+      file.read((char *)&hvx, FILE_SIZE_FLOAT);
+      file.read((char *)&hvy, FILE_SIZE_FLOAT);
+      file.read((char *)&hvz, FILE_SIZE_FLOAT);
+      file.read((char *)&vx, FILE_SIZE_FLOAT);
+      file.read((char *)&vy, FILE_SIZE_FLOAT);
+      file.read((char *)&vz, FILE_SIZE_FLOAT);
 
-    if(ci < 0) ci = 0; else if(ci >= nx) ci = nx-1;
-    if(cj < 0) cj = 0; else if(cj >= ny) cj = ny-1;
-    if(ck < 0) ck = 0; else if(ck >= nz) ck = nz-1;
+      // checking data order in memory
+      if(!isLittleEndian()) {
+        px  = bswap_float(px);
+        py  = bswap_float(py);
+        pz  = bswap_float(pz);
+        hvx = bswap_float(hvx);
+        hvy = bswap_float(hvy);
+        hvz = bswap_float(hvz);
+        vx  = bswap_float(vx);
+        vy  = bswap_float(vy);
+        vz  = bswap_float(vz);
+      }
 
-    int index = (ck*ny + cj)*nx + ci;
-    Cell *cell = &cells[index];
+      int ci = (int)(((float)px - domainMin.x) / delta.x);
+      int cj = (int)(((float)py - domainMin.y) / delta.y);
+      int ck = (int)(((float)pz - domainMin.z) / delta.z);
 
-    //go to last cell structure in list
-    int np = cnumPars[index];
-    while(np > PARTICLES_PER_CELL) {
-      cell = cell->next;
-      np = np - PARTICLES_PER_CELL;
-    }
-    //add another cell structure if everything full
-    if( (np % PARTICLES_PER_CELL == 0) && (cnumPars[index] != 0) ) {
-      cell->next = cellpool_getcell(&pool);
-      cell = cell->next;
-      np = np - PARTICLES_PER_CELL; // np = 0;
-    }
+      if(ci < 0) ci = 0; else if(ci >= nx) ci = nx-1;
+      if(cj < 0) cj = 0; else if(cj >= ny) cj = ny-1;
+      if(ck < 0) ck = 0; else if(ck >= nz) ck = nz-1;
 
-    //add particle to cell
-    cell->p[np].x = px;
-    cell->p[np].y = py;
-    cell->p[np].z = pz;
-    cell->hv[np].x = hvx;
-    cell->hv[np].y = hvy;
-    cell->hv[np].z = hvz;
-    cell->v[np].x = vx;
-    cell->v[np].y = vy;
-    cell->v[np].z = vz;
-#ifdef ENABLE_VISUALIZATION
-	vMin.x = std::min(vMin.x, cell->v[np].x);
-	vMax.x = std::max(vMax.x, cell->v[np].x);
-	vMin.y = std::min(vMin.y, cell->v[np].y);
-	vMax.y = std::max(vMax.y, cell->v[np].y);
-	vMin.z = std::min(vMin.z, cell->v[np].z);
-	vMax.z = std::max(vMax.z, cell->v[np].z);
-#endif
-    ++cnumPars[index];
-  }
+      int index = (ck*ny + cj)*nx + ci;
+      Cell *cell = &cells[index];
+
+      //add particle to cell
+      // go to last cell structure in list
+      int np = cnumPars[index];
+      while(np > PARTICLES_PER_CELL) {
+          cell = cell->next; 
+          np -= PARTICLES_PER_CELL;
+      } // while
+
+      // add another cell structure if everything full
+      if( (np % PARTICLES_PER_CELL == 0) && (cnumPars[index] != 0) ) {
+        cell->next = cellpool_getcell(&pool);
+        cell = cell->next;
+        np -= PARTICLES_PER_CELL; // np = 0;
+      }
+
+      // setting this cell's coordinates
+      cell->p[np].x = px;
+      cell->p[np].y = py;
+      cell->p[np].z = pz;
+      cell->hv[np].x = hvx;
+      cell->hv[np].y = hvy;
+      cell->hv[np].z = hvz;
+      cell->v[np].x = vx;
+      cell->v[np].y = vy;
+      cell->v[np].z = vz;
+
+    #ifdef ENABLE_VISUALIZATION
+      vMin.x = std::min(vMin.x, cell->v[np].x);
+      vMax.x = std::max(vMax.x, cell->v[np].x);
+      vMin.y = std::min(vMin.y, cell->v[np].y);
+      vMax.y = std::max(vMax.y, cell->v[np].y);
+      vMin.z = std::min(vMin.z, cell->v[np].z);
+      vMax.z = std::max(vMax.z, cell->v[np].z);
+    #endif
+        
+      ++cnumPars[index];
+  } // for
 
   std::cout << "Number of particles: " << numParticles << std::endl;
-}
+} // InitSim
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -472,8 +512,8 @@ void ComputeForces()
   int neighCells[3*3*3];
 
   int cindex = 0;
-  for(int ck = 0; ck < nz; ++ck)
-    for(int cj = 0; cj < ny; ++cj)
+  for(int ck = 0; ck < nz; ++ck) {
+    for(int cj = 0; cj < ny; ++cj) {
       for(int ci = 0; ci < nx; ++ci, ++cindex)
       {
         int np = cnumPars[cindex];
@@ -516,6 +556,9 @@ void ComputeForces()
           }
         }
       }
+    }
+
+  }
 
   const float tc = hSq*hSq*hSq;
   for(int i = 0; i < numCells; ++i)
@@ -938,12 +981,6 @@ void AdvanceParticles()
     {
       Vec3 v_half = cell->hv[j % PARTICLES_PER_CELL] + cell->a[j % PARTICLES_PER_CELL]*timeStep;
 #if defined(USE_ImpeneratableWall)
-	  // N.B. The integration of the position can place the particle
-	  // outside the domain. Although we could place a test in this loop
-	  // we would be unnecessarily testing particles on interior cells.
-	  // Therefore, to reduce the amount of computations we make a later
-	  // pass on the perimiter cells to account for particle migration
-	  // beyond domain
 #endif
       cell->p[j % PARTICLES_PER_CELL] += v_half * timeStep;
       cell->v[j % PARTICLES_PER_CELL] = cell->hv[j % PARTICLES_PER_CELL] + v_half;

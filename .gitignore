@@ -2,3 +2,7 @@
 scorep*
 compare
 particles
+out_*
+in_*
+testing.out
+outputs/

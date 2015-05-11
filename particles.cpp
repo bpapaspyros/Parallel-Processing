@@ -46,18 +46,19 @@ int GetNeighborCells(int ci, int cj, int ck, int *neighCells);
 
 cellpool pool;
 
+// setting the simulation variables concerning the physics
 float restParticlesPerMeter, h, hSq;
 float densityCoeff, pressureCoeff, viscosityCoeff;
 static float timeStep = 0.001;
 
-int nx, ny, nz;     // number of grid cells in each dimension
-Vec3 delta;         // cell dimensions
-int numParticles = 0;
-int numCells = 0;
-Cell *cells = NULL;
-Cell *cells2 = NULL;
-int *cnumPars = 0;
-int *cnumPars2 = 0;
+int nx, ny, nz;       // number of grid cells in each dimension
+Vec3 delta;           // cell dimensions
+int numParticles = 0; // number of particles
+int numCells = 0;     // number of cells
+Cell *cells = NULL;   // array of cells
+Cell *cells2 = NULL;  // helper array of cells
+int *cnumPars = 0;    // array of particles
+int *cnumPars2 = 0;   // helper array of particles
 Cell **last_cells = NULL; //helper array with pointers to last cell structure of "cells" array lists
 
 #ifdef ENABLE_VISUALIZATION
@@ -79,6 +80,8 @@ void InitSim(char const *fileName)
   // attempting to load the file
   std::cout << "Loading file \"" << fileName << "\"..." << std::endl;
   std::ifstream file(fileName, std::ios::binary);
+
+    // file was not found
   if(!file) {
     std::cerr << "Error opening file. Aborting." << std::endl;
     exit(1);
@@ -88,8 +91,12 @@ void InitSim(char const *fileName)
   // reading through the file's parameters paying attention to their memory organization
   float restParticlesPerMeter_le;
   int numParticles_le;
+
+      // reading the first 2 values concerning the particles per meter and their total number
   file.read((char *)&restParticlesPerMeter_le, FILE_SIZE_FLOAT);
   file.read((char *)&numParticles_le, FILE_SIZE_INT);
+
+      // if the data is in fact in big endian then swap them
   if(!isLittleEndian()) {
     restParticlesPerMeter = bswap_float(restParticlesPerMeter_le);
     numParticles          = bswap_int32(numParticles_le);
@@ -101,28 +108,44 @@ void InitSim(char const *fileName)
   // initializing the the pool with cells
   cellpool_init(&pool, numParticles);
 
-  h = kernelRadiusMultiplier / restParticlesPerMeter;
-  hSq = h*h;
+  // setting the height calculated by the kernel radius divided by restParticles per meter
+  h = kernelRadiusMultiplier / restParticlesPerMeter; 
+  hSq = h*h;  // height squared
 
-  // begin initializations doing it single threaded
+  /* begin initializations doing it single threaded */
+    
+  // calculating the coefficients
   float coeff1 = 315.0 / (64.0*pi*powf(h,9.0));
   float coeff2 = 15.0 / (pi*powf(h,6.0));
   float coeff3 = 45.0 / (pi*powf(h,6.0));
-  float particleMass = 0.5*doubleRestDensity / (restParticlesPerMeter*restParticlesPerMeter*restParticlesPerMeter);
+
+  // particle's characteristics
+  float particleMass = 0.5 * doubleRestDensity / (restParticlesPerMeter*restParticlesPerMeter*restParticlesPerMeter);
   densityCoeff = particleMass * coeff1;
-  pressureCoeff = 3.0*coeff2 * 0.50*stiffnessPressure * particleMass;
+  pressureCoeff = 3.0 * coeff2 * 0.50*stiffnessPressure * particleMass;
   viscosityCoeff = viscosity * coeff3 * particleMass;
 
+  // setting the range according to the preset values
   Vec3 range = domainMax - domainMin;
+
+  // setting the grid dimensions according to the range and height
   nx = (int)(range.x / h);
   ny = (int)(range.y / h);
   nz = (int)(range.z / h);
+
+    // checking if all went well with the initialization
   assert(nx >= 1 && ny >= 1 && nz >= 1);
+
+  // calculating the total number of cells in the simulation
   numCells = nx*ny*nz;
   std::cout << "Number of cells: " << numCells << std::endl;
+
+  // setting the cells per dimension
   delta.x = range.x / nx;
   delta.y = range.y / ny;
   delta.z = range.z / nz;
+
+    // checking if all went well with the initialization
   assert(delta.x >= h && delta.y >= h && delta.z >= h);
 
   /* making some cache adjustments to increace the hit ratio */
@@ -201,20 +224,28 @@ void InitSim(char const *fileName)
         vz  = bswap_float(vz);
       }
 
+      // assigning grid positions
       int ci = (int)(((float)px - domainMin.x) / delta.x);
       int cj = (int)(((float)py - domainMin.y) / delta.y);
       int ck = (int)(((float)pz - domainMin.z) / delta.z);
 
+      // checking if the grid positions are valid
+      // if they are out of bound then reset them
       if(ci < 0) ci = 0; else if(ci >= nx) ci = nx-1;
       if(cj < 0) cj = 0; else if(cj >= ny) cj = ny-1;
       if(ck < 0) ck = 0; else if(ck >= nz) ck = nz-1;
 
+      // calculate the index of the array depending 
+      // on its grid position
       int index = (ck*ny + cj)*nx + ci;
+
+      // get the position of this cell in the array
       Cell *cell = &cells[index];
 
-      //add particle to cell
+      // add particle to cell
       // go to last cell structure in list
       int np = cnumPars[index];
+
       while(np > PARTICLES_PER_CELL) {
           cell = cell->next; 
           np -= PARTICLES_PER_CELL;
@@ -227,7 +258,7 @@ void InitSim(char const *fileName)
         np -= PARTICLES_PER_CELL; // np = 0;
       }
 
-      // setting this cell's coordinates
+      // setting this particle's coordinates in its cell
       cell->p[np].x = px;
       cell->p[np].y = py;
       cell->p[np].z = pz;
@@ -238,6 +269,7 @@ void InitSim(char const *fileName)
       cell->v[np].y = vy;
       cell->v[np].z = vz;
 
+      // setting the coordinates for glut to see
     #ifdef ENABLE_VISUALIZATION
       vMin.x = std::min(vMin.x, cell->v[np].x);
       vMax.x = std::max(vMax.x, cell->v[np].x);
@@ -247,6 +279,7 @@ void InitSim(char const *fileName)
       vMax.z = std::max(vMax.z, cell->v[np].z);
     #endif
         
+        // increasing the particle counter for the computed index
       ++cnumPars[index];
   } // for
 
@@ -327,23 +360,31 @@ void SaveFile(char const *fileName)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-
+/**
+ * @brief Iterating through the cells to clean up any memory allocations
+ */
 void CleanUpSim()
 {
   // first return extended cells to cell pools
-  for(int i=0; i< numCells; ++i)
+  for(int i=0; i<numCells; ++i)
   {
     Cell& cell = cells[i];
-	while(cell.next)
-	{
-		Cell *temp = cell.next;
-		cell.next = temp->next;
-		cellpool_returncell(&pool, temp);
-	}
+  	
+    // iterate to the end of the cell list returning 
+    // the cells to the pool
+    while(cell.next)
+  	{
+  		Cell *temp = cell.next;
+  		cell.next = temp->next;
+  		cellpool_returncell(&pool, temp);
+  	}
   }
+  
   // now return cell pools
   cellpool_destroy(&pool);
 
+  // free up all heap allocated space
+  // by freeing all the arrays
 #if defined(WIN32)
   _aligned_free(cells);
   _aligned_free(cells2);
@@ -975,8 +1016,8 @@ void ProcessCollisions2()
 }
 #endif
 #endif
-////////////////////////////////////////////////////////////////////////////////
 
+////////////////////////////////////////////////////////////////////////////////
 /**
  * @brief Advancing the particles' positions and velocities depending on
  * their new status
@@ -1003,7 +1044,7 @@ void AdvanceParticles()
 #if defined(USE_ImpeneratableWall)
 #endif
 
-      // updating the cell's values
+      // updating the cell's values (position, velocity, etc)
       cell->p[j % PARTICLES_PER_CELL] += v_half * timeStep;
       cell->v[j % PARTICLES_PER_CELL] = cell->hv[j % PARTICLES_PER_CELL] + v_half;
       cell->v[j % PARTICLES_PER_CELL] *= 0.5;
@@ -1013,9 +1054,10 @@ void AdvanceParticles()
       if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
         cell = cell->next;
       }
-    }
-  }
-}
+
+    }// j
+  }// i
+}// AdvanceParticles
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -1047,43 +1089,57 @@ void AdvanceFrame()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-
+/**
+ * @brief main, responsible for calling the initialization functions and 
+ * the ones responsible for the simulation
+ */
 int main(int argc, char *argv[])
 {
-  if(argc < 3 || argc >= 5)
-  {
+  // checking argument count and if wrong printing a usage message
+  if(argc < 3 || argc >= 5) {
     std::cout << "Usage: " << argv[0] << " <framenum> <.fluid input file> [.fluid output file]" << std::endl;
     return -1;
   }
 
+  // parsing to int the frame number given by the user
   int framenum = atoi(argv[1]);
 
+  // wrong frame number, terminating ...
   if(framenum < 1) {
     std::cerr << "<framenum> must at least be 1" << std::endl;
     return -1;
   }
 
+  // ENABLE_CFL_CHECK was enabled (Courant–Friedrichs–Lewy condition)
 #ifdef ENABLE_CFL_CHECK
   std::cout << "WARNING: Check for Courant–Friedrichs–Lewy condition enabled. Do not use for performance measurements." << std::endl;
 #endif
 
+  // initializing the simulation with the given input file
   InitSim(argv[2]);
+
+  // visualization enabled at compile time, setting the handlers with glut
 #ifdef ENABLE_VISUALIZATION
   InitVisualizationMode(&argc, argv, &AdvanceFrame, &numCells, &cells, &cnumPars);
 #endif
 
+  // if no visualization was enabled
 #ifndef ENABLE_VISUALIZATION
 
-//core of benchmark program (the Region-of-Interest)
+  // core of benchmark program (the Region-of-Interest)
   for(int i = 0; i < framenum; ++i)
     AdvanceFrame();
 
-#else //ENABLE_VISUALIZATION
+  // else render the new data
+#else
   Visualize();
-#endif //ENABLE_VISUALIZATION
+#endif
 
+  // if requested by the user, then save the outputs to a file
   if(argc > 3)
     SaveFile(argv[3]);
+
+  // cleaning up memory allocations
   CleanUpSim();
 
   return 0;

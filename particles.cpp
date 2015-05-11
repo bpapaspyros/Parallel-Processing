@@ -558,7 +558,7 @@ void ComputeForces()
             }
           }
           //move pointer to next cell in list if end of array is reached
-          if(ipar % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
+          if(ipar % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {            
             cell = cell->next;
           }
         }
@@ -977,23 +977,39 @@ void ProcessCollisions2()
 #endif
 ////////////////////////////////////////////////////////////////////////////////
 
+/**
+ * @brief Advancing the particles' positions and velocities depending on
+ * their new status
+ */
 void AdvanceParticles()
 {
+  Cell *cell; // pointer to a cell
+  int np;     // number of particles in a cell
+  int j;      // inner for counter
+
+  // iterating through the cells
+  // moving them accordingly
+  #pragma omp parallel for schedule(static, 2) private(cell, np, j)
   for(int i = 0; i < numCells; ++i)
   {
-    Cell *cell = &cells[i];
-    int np = cnumPars[i];
-    for(int j = 0; j < np; ++j)
+    cell = &cells[i];
+    np = cnumPars[i];
+
+    for(j = 0; j < np; ++j)
     {
+      // computing the new velocity
       Vec3 v_half = cell->hv[j % PARTICLES_PER_CELL] + cell->a[j % PARTICLES_PER_CELL]*timeStep;
+
 #if defined(USE_ImpeneratableWall)
 #endif
+
+      // updating the cell's values
       cell->p[j % PARTICLES_PER_CELL] += v_half * timeStep;
       cell->v[j % PARTICLES_PER_CELL] = cell->hv[j % PARTICLES_PER_CELL] + v_half;
       cell->v[j % PARTICLES_PER_CELL] *= 0.5;
       cell->hv[j % PARTICLES_PER_CELL] = v_half;
 
-      //move pointer to next cell in list if end of array is reached
+      // move pointer to next cell in list if end of array is reached
       if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
         cell = cell->next;
       }

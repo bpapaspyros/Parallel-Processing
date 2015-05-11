@@ -142,8 +142,8 @@ static const float viscosity = 0.4;
 static const float doubleRestDensity = 2000.0;
 static const float kernelRadiusMultiplier = 1.695;
 static const Vec3 externalAcceleration(0.0, -9.8, 0.0);
-static const Vec3 domainMin(-0.065, -0.08, -0.065);
-static const Vec3 domainMax(0.065, 0.1, 0.065);
+static const Vec3 domainMin(-0.0650000000, -0.080000000, -0.0650000000);
+static const Vec3 domainMax(0.0650000000, 0.10000000, 0.0650000000);
 static const float Zero = 0.0;
 //Constants for file I/O
 #define FILE_SIZE_INT 4

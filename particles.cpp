@@ -1,6 +1,13 @@
 //Code written by Richard O. Lee and Christian Bienia
 //Modified by Christian Fensch
 
+
+//////
+#include "bTimer.hpp"
+bTimer b;
+//////
+
+
 #include <cstdlib>
 #include <cstring>
 
@@ -557,7 +564,6 @@ void ComputeForces()
         }
       }
     }
-
   }
 
   const float tc = hSq*hSq*hSq;
@@ -1003,6 +1009,7 @@ void AdvanceFrame()
   ComputeForces();
   ProcessCollisions();
   AdvanceParticles();
+
 #if defined(USE_ImpeneratableWall)
   // N.B. The integration of the position can place the particle
   // outside the domain. We now make a pass on the perimiter cells

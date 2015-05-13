@@ -65,7 +65,7 @@ Cell *cells2 = NULL;  // helper array of cells
 int *cnumPars = 0;    // array of particles
 int *cnumPars2 = 0;   // helper array of particles
 Cell **last_cells = NULL; // helper array with pointers to last cell structure of "cells" array lists
-omp_lock_t *cell_mutexes = 0;
+omp_lock_t *cell_mutexes = 0; // array of mutexes for future use in race conditions
 
 #ifdef ENABLE_VISUALIZATION
 Vec3 vMax(0.0,0.0,0.0);
@@ -532,36 +532,53 @@ void RebuildGrid()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-
+/**
+ * @brief Stores the indexes of every neighbour of the given cell in
+ * the array passed as parameter
+ *
+ * @param Grid coordinates of the cell (ci, cj, ck), neighCells
+ * which is the array that will hold the neighbours' indexes
+ */
 int GetNeighborCells(int ci, int cj, int ck, int *neighCells)
 {
+  // counter for the neighbour cells
   int numNeighCells = 0;
 
   // have the nearest particles first -> help branch prediction
-  int my_index = (ck*ny + cj)*nx + ci;
-  neighCells[numNeighCells] = my_index;
-  ++numNeighCells;
+  int my_index = (ck*ny + cj)*nx + ci;  // getting my cell's index
+  neighCells[numNeighCells] = my_index; // setting itself as a neighbour
+  ++numNeighCells;                      // increasing the counter
 
+  // checking around our cell (+- one position)
   for(int di = -1; di <= 1; ++di)
     for(int dj = -1; dj <= 1; ++dj)
       for(int dk = -1; dk <= 1; ++dk)
       {
+        // offsets for the index (offsets around our index)
         int ii = ci + di;
         int jj = cj + dj;
         int kk = ck + dk;
+
+        // checking if the offsets are within bounds
         if(ii >= 0 && ii < nx && jj >= 0 && jj < ny && kk >= 0 && kk < nz)
         {
+          // getting the possible neighbour's index
           int index = (kk*ny + jj)*nx + ii;
+
+          // checking if this is indeed a neighbour
+          // and does have particles
           if((index < my_index) && (cnumPars[index] != 0))
           {
+            // storing the index in the array
             neighCells[numNeighCells] = index;
-            ++numNeighCells;
+            ++numNeighCells;  // increasin the neighbours' counter
           }
         }
-      }
+      }// dk
 
+  // return this counter !
   return numNeighCells;
-}
+}// GetNeighborCells
 
 ////////////////////////////////////////////////////////////////////////////////
 /**

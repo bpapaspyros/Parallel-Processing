@@ -888,136 +888,272 @@ void ProcessCollisions()
 // This would entail a 2nd pass on the perimiters after AdvanceParticles (as opposed
 // to inside AdvanceParticles). Your fluid dynamisist should properly devise the
 // equasions. 
+
+/**
+ * @brief Processing the particle collisions for each one of the dimensions
+ */
 void ProcessCollisions()
 {
-	int x,y,z;
-	x=0;	// along the domainMin.x wall
-	for(y=0; y<ny; ++y)
-	{
-		for(z=0; z<nz; ++z)
-		{
-			int ci = (z*ny + y)*nx + x;
-			Cell *cell = &cells[ci];
-			int np = cnumPars[ci];
-			for(int j = 0; j < np; ++j)
-			{
-				int ji = j % PARTICLES_PER_CELL;
-				float pos_x = cell->p[ji].x + cell->hv[ji].x * timeStep;
-				float diff = parSize - (pos_x - domainMin.x);
-				if(diff > epsilon)
-					cell->a[ji].x += stiffnessCollisions*diff - damping*cell->v[ji].x;
-				//move pointer to next cell in list if end of array is reached
-				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-					cell = cell->next;
-			}
-		}
-	}
-	x=nx-1;	// along the domainMax.x wall
-	for(y=0; y<ny; ++y)
-	{
-		for(z=0; z<nz; ++z)
-		{
-			int ci = (z*ny + y)*nx + x;
-			Cell *cell = &cells[ci];
-			int np = cnumPars[ci];
-			for(int j = 0; j < np; ++j)
-			{
-				int ji = j % PARTICLES_PER_CELL;
-				float pos_x = cell->p[ji].x + cell->hv[ji].x * timeStep;
-				float diff = parSize - (domainMax.x - pos_x);
-				if(diff > epsilon)
-					cell->a[ji].x -= stiffnessCollisions*diff + damping*cell->v[ji].x;
-				//move pointer to next cell in list if end of array is reached
-				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-					cell = cell->next;
-			}
-		}
-	}
-	y=0;	// along the domainMin.y wall
-	for(x=0; x<nx; ++x)
-	{
-		for(z=0; z<nz; ++z)
-		{
-			int ci = (z*ny + y)*nx + x;
-			Cell *cell = &cells[ci];
-			int np = cnumPars[ci];
-			for(int j = 0; j < np; ++j)
-			{
-				int ji = j % PARTICLES_PER_CELL;
-				float pos_y = cell->p[ji].y + cell->hv[ji].y * timeStep;
-				float diff = parSize - (pos_y - domainMin.y);
-				if(diff > epsilon)
-					cell->a[ji].y += stiffnessCollisions*diff - damping*cell->v[ji].y;
-				//move pointer to next cell in list if end of array is reached
-				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-					cell = cell->next;
-			}
-		}
-	}
-	y=ny-1;	// along the domainMax.y wall
-	for(x=0; x<nx; ++x)
-	{
-		for(z=0; z<nz; ++z)
-		{
-			int ci = (z*ny + y)*nx + x;
-			Cell *cell = &cells[ci];
-			int np = cnumPars[ci];
-			for(int j = 0; j < np; ++j)
-			{
-				int ji = j % PARTICLES_PER_CELL;
-				float pos_y = cell->p[ji].y + cell->hv[ji].y * timeStep;
-				float diff = parSize - (domainMax.y - pos_y);
-				if(diff > epsilon)
-					cell->a[ji].y -= stiffnessCollisions*diff + damping*cell->v[ji].y;
-				//move pointer to next cell in list if end of array is reached
-				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-					cell = cell->next;
-			}
-		}
-	}
-	z=0;	// along the domainMin.z wall
-	for(x=0; x<nx; ++x)
-	{
-		for(y=0; y<ny; ++y)
-		{
-			int ci = (z*ny + y)*nx + x;
-			Cell *cell = &cells[ci];
-			int np = cnumPars[ci];
-			for(int j = 0; j < np; ++j)
-			{
-				int ji = j % PARTICLES_PER_CELL;
-				float pos_z = cell->p[ji].z + cell->hv[ji].z * timeStep;
-				float diff = parSize - (pos_z - domainMin.z);
-				if(diff > epsilon)
-					cell->a[ji].z += stiffnessCollisions*diff - damping*cell->v[ji].z;
-				//move pointer to next cell in list if end of array is reached
-				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-					cell = cell->next;
-			}
-		}
-	}
-	z=nz-1;	// along the domainMax.z wall
-	for(x=0; x<nx; ++x)
-	{
-		for(y=0; y<ny; ++y)
-		{
-			int ci = (z*ny + y)*nx + x;
-			Cell *cell = &cells[ci];
-			int np = cnumPars[ci];
-			for(int j = 0; j < np; ++j)
-			{
-				int ji = j % PARTICLES_PER_CELL;
-				float pos_z = cell->p[ji].z + cell->hv[ji].z * timeStep;
-				float diff = parSize - (domainMax.z - pos_z);
-				if(diff > epsilon)
-					cell->a[ji].z -= stiffnessCollisions*diff + damping*cell->v[ji].z;
-				//move pointer to next cell in list if end of array is reached
-				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-					cell = cell->next;
-			}
-		}
-	}
-}
+  // variables for the boundaries
+  int x,y,z;
+
+  // splitting the parallel region to independent sections
+  #pragma omp sections
+  { 
+      #pragma omp section
+      { 
+          x=0; // along the domainMin.x wall
+
+          // y axis min
+          for(y=0; y<ny; ++y)
+          {
+              // elevating the z axis
+              for(z=0; z<nz; ++z)
+              {
+                  // calculating the corresponding index
+                  int ci = (z*ny + y)*nx + x;
+
+                  // getting a pointer to this cell
+                  Cell *cell = &cells[ci];
+
+                  // getting the number of particles
+                  int np = cnumPars[ci];
+
+                  // iterating for all the particles
+                  for(int j = 0; j < np; ++j)
+                  {
+                      // getting particle position in the cell
+                      int ji = j % PARTICLES_PER_CELL;
+
+                      // calculating the new position and the distance
+                      float pos_x = cell->p[ji].x + cell->hv[ji].x * timeStep;
+                      float diff = parSize - (pos_x - domainMin.x);
+
+                      // checking the tollerance
+                      if(diff > epsilon) {
+                        cell->a[ji].x += stiffnessCollisions*diff - damping*cell->v[ji].x;
+                      }
+                      
+                      // move pointer to next cell in list if end of array is reached
+                      if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
+                        cell = cell->next;
+                      }
+                  }// j
+              }// z
+          }// y
+      }// section
+
+
+      #pragma omp section
+      { 
+          x=nx-1; // along the domainMax.x wall
+
+          for(y=0; y<ny; ++y)
+          {
+              for(z=0; z<nz; ++z)
+              {
+                  // calculating the corresponding index
+                  int ci = (z*ny + y)*nx + x;
+
+                  // getting a pointer to this cell
+                  Cell *cell = &cells[ci];
+
+                  // getting the number of particles
+                  int np = cnumPars[ci];
+                  
+                  // iterating for all the particles
+                  for(int j = 0; j < np; ++j)
+                  {
+                      // getting particle position in the cell
+                      int ji = j % PARTICLES_PER_CELL;
+
+                      // calculating the new position and the distance
+                      float pos_x = cell->p[ji].x + cell->hv[ji].x * timeStep;
+                      float diff = parSize - (domainMax.x - pos_x);
+
+                      // checking the tollerance
+                      if(diff > epsilon) {
+                        cell->a[ji].x -= stiffnessCollisions*diff + damping*cell->v[ji].x;
+                      }
+
+                      // move pointer to next cell in list if end of array is reached
+                      if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
+                        cell = cell->next;
+                      }
+                  }// j
+              }// z
+          }// y
+      }// section
+ 
+
+      #pragma omp section
+      {
+          y=0; // along the domainMin.y wall
+
+          for(x=0; x<nx; ++x)
+          {
+              for(z=0; z<nz; ++z)
+              {
+                  // calculating the corresponding index
+                  int ci = (z*ny + y)*nx + x;
+
+                  // getting a pointer to this cell
+                  Cell *cell = &cells[ci];
+
+                  // getting the number of particles
+                  int np = cnumPars[ci];
+
+                  // iterating for all the particles
+                  for(int j = 0; j < np; ++j)
+                  {
+                      // getting particle position in the cell                    
+                      int ji = j % PARTICLES_PER_CELL;
+
+                      // calculating the new position and the distance
+                      float pos_y = cell->p[ji].y + cell->hv[ji].y * timeStep;
+                      float diff = parSize - (pos_y - domainMin.y);
+
+                      // checking the tollerance
+                      if(diff > epsilon) {
+                        cell->a[ji].y += stiffnessCollisions*diff - damping*cell->v[ji].y;
+                      }
+                      
+                      // move pointer to next cell in list if end of array is reached
+                      if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
+                        cell = cell->next;
+                      }
+                  }// j
+              }// z
+          }// x
+      }// section
+
+
+      #pragma omp section
+      {
+          y=ny-1; // along the domainMax.y wall
+
+          for(x=0; x<nx; ++x)
+          {
+              for(z=0; z<nz; ++z)
+              {
+                  // calculating the corresponding index
+                  int ci = (z*ny + y)*nx + x;
+
+                  // getting a pointer to this cell
+                  Cell *cell = &cells[ci];
+
+                  // getting the number of particles
+                  int np = cnumPars[ci];
+
+                  // iterating for all the particles
+                  for(int j = 0; j < np; ++j)
+                  {
+                      // getting particle position in the cell  
+                      int ji = j % PARTICLES_PER_CELL;
+                      
+                      // calculating the new position and the distance
+                      float pos_y = cell->p[ji].y + cell->hv[ji].y * timeStep;
+                      float diff = parSize - (domainMax.y - pos_y);
+
+                      // checking the tollerance
+                      if(diff > epsilon) {
+                        cell->a[ji].y -= stiffnessCollisions*diff + damping*cell->v[ji].y;
+                      }
+
+                      // move pointer to next cell in list if end of array is reached
+                      if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
+                        cell = cell->next;
+                      }
+                  }// j
+              }// z
+          }// x
+      }// section
+
+
+      #pragma omp section
+      {
+          z=0; // along the domainMin.z wall
+          for(x=0; x<nx; ++x)
+          {
+                for(y=0; y<ny; ++y)
+                {
+                  // calculating the corresponding index
+                  int ci = (z*ny + y)*nx + x;
+
+                  // getting a pointer to this cell
+                  Cell *cell = &cells[ci];
+
+                  // getting the number of particles
+                  int np = cnumPars[ci];
+
+                  // iterating for all the particles
+                  for(int j = 0; j < np; ++j)
+                  {
+                      // getting particle position in the cell  
+                      int ji = j % PARTICLES_PER_CELL;
+
+                      // calculating the new position and the distance
+                      float pos_z = cell->p[ji].z + cell->hv[ji].z * timeStep;
+                      float diff = parSize - (pos_z - domainMin.z);
+
+                      // checking the tollerance
+                      if(diff > epsilon) {
+                        cell->a[ji].z += stiffnessCollisions*diff - damping*cell->v[ji].z;
+                      }
+                      
+                      // move pointer to next cell in list if end of array is reached
+                      if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
+                        cell = cell->next;
+                      }
+                  }// j
+              }// y
+          }// x
+      }// section
+
+
+      #pragma omp section
+      {
+          z=nz-1; // along the domainMax.z wall
+
+          for(x=0; x<nx; ++x)
+          {
+              for(y=0; y<ny; ++y)
+              {
+                  // calculating the corresponding index
+                  int ci = (z*ny + y)*nx + x;
+
+                  // getting a pointer to this cell
+                  Cell *cell = &cells[ci];
+
+                  // getting the number of particles
+                  int np = cnumPars[ci];
+
+                  // iterating for all the particles
+                  for(int j = 0; j < np; ++j)
+                  {
+                      // getting particle position in the cell 
+                      int ji = j % PARTICLES_PER_CELL;
+                      
+                      // calculating the new position and the distance
+                      float pos_z = cell->p[ji].z + cell->hv[ji].z * timeStep;
+                      float diff = parSize - (domainMax.z - pos_z);
+
+                      // checking the tollerance
+                      if(diff > epsilon) {
+                        cell->a[ji].z -= stiffnessCollisions*diff + damping*cell->v[ji].z;
+                      }
+
+                      // move pointer to next cell in list if end of array is reached
+                      if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
+                        cell = cell->next;
+                      }
+                  }// j
+              }// y
+          }// x
+      }// section
+  } // omp section
+} // end of function
+
 #define USE_ImpeneratableWall
 #if defined(USE_ImpeneratableWall)
 void ProcessCollisions2()
@@ -1219,17 +1355,12 @@ void AdvanceFrame()
 {
   RebuildGrid();
 
-  b.startT();
-
 #pragma omp parallel
 {
   ComputeForces();
+  ProcessCollisions();
 }// omp parallel
 
-  b.stopT();
-  b.printSum();
-
-  ProcessCollisions();
   AdvanceParticles();
 
 #if defined(USE_ImpeneratableWall)

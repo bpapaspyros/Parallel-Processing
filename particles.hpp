@@ -109,7 +109,7 @@ public:
   Vec3 hv[PARTICLES_PER_CELL]; \
   Vec3 v[PARTICLES_PER_CELL]; \
   Vec3 a[PARTICLES_PER_CELL]; \
-  float density[PARTICLES_PER_CELL];
+  double density[PARTICLES_PER_CELL];
 
 //Helper structure for padding calculation, not used directly by the program
 struct Cell_aux {

@@ -56,5 +56,4 @@ class bTimer {
 		double sum;
 };
 
-
 #endif

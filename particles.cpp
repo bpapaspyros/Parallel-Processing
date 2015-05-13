@@ -1,9 +1,9 @@
 //Code written by Richard O. Lee and Christian Bienia
 //Modified by Christian Fensch
 
-
 //////
 #include "bTimer.hpp"
+#include <unistd.h>
 bTimer b;
 //////
 
@@ -18,7 +18,12 @@ bTimer b;
 
 #include "particles.hpp"
 #include "cellpool.hpp"
-#include <omp.h>
+
+#ifdef _OPENMP
+   #include <omp.h>
+#else
+   #define omp_get_thread_num() 0
+#endif
 
 #ifdef ENABLE_VISUALIZATION
 #include "view.hpp"
@@ -59,7 +64,7 @@ Cell *cells = NULL;   // array of cells
 Cell *cells2 = NULL;  // helper array of cells
 int *cnumPars = 0;    // array of particles
 int *cnumPars2 = 0;   // helper array of particles
-Cell **last_cells = NULL; //helper array with pointers to last cell structure of "cells" array lists
+Cell **last_cells = NULL; // helper array with pointers to last cell structure of "cells" array lists
 
 #ifdef ENABLE_VISUALIZATION
 Vec3 vMax(0.0,0.0,0.0);
@@ -287,15 +292,21 @@ void InitSim(char const *fileName)
 } // InitSim
 
 ////////////////////////////////////////////////////////////////////////////////
-
+/**
+ * @brief Save the output of the simulation to a file with the given name
+ * 
+ * @param char const *filename (output file name)
+ */
 void SaveFile(char const *fileName)
 {
   std::cout << "Saving file \"" << fileName << "\"..." << std::endl;
 
+  // attempting to open the file and checking if successful
   std::ofstream file(fileName, std::ios::binary);
   assert(file);
 
-  //Always use single precision float variables b/c file format uses single precision
+  // Always use single precision float variables b/c file format uses single precision
+  // checking 
   if(!isLittleEndian()) {
     float restParticlesPerMeter_le;
     int   numParticles_le;
@@ -542,70 +553,141 @@ int GetNeighborCells(int ci, int cj, int ck, int *neighCells)
 
 void ComputeForces()
 {
-  for(int i = 0; i < numCells; ++i)
+  // array of locks for the upcoming race conditions
+  omp_lock_t cell_mutexes[numCells];
+
+  #pragma omp parallel
   {
-    Cell *cell = &cells[i];
-    int np = cnumPars[i];
-    for(int j = 0; j < np; ++j)
-    {
-      cell->density[j % PARTICLES_PER_CELL] = 0.0;
-      cell->a[j % PARTICLES_PER_CELL] = externalAcceleration;
-      //move pointer to next cell in list if end of array is reached
-      if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
-        cell = cell->next;
-      }
-    }
-  }
-
-  int neighCells[3*3*3];
-
-  int cindex = 0;
-  for(int ck = 0; ck < nz; ++ck) {
-    for(int cj = 0; cj < ny; ++cj) {
-      for(int ci = 0; ci < nx; ++ci, ++cindex)
+      // initialize arrays, so that they are ready 
+      // for updating 
+      #pragma omp for schedule(static)
+      for(int i = 0; i < numCells; ++i)
       {
-        int np = cnumPars[cindex];
-        if(np == 0)
-          continue;
+        Cell *cell = &cells[i];
+        int np = cnumPars[i];
 
-        int numNeighCells = GetNeighborCells(ci, cj, ck, neighCells);
-
-        Cell *cell = &cells[cindex];
-        for(int ipar = 0; ipar < np; ++ipar)
+        // for all the particles in the cell
+        for(int j = 0; j < np; ++j)
         {
-          for(int inc = 0; inc < numNeighCells; ++inc)
-          {
-            int cindexNeigh = neighCells[inc];
-            Cell *neigh = &cells[cindexNeigh];
-            int numNeighPars = cnumPars[cindexNeigh];
-            for(int iparNeigh = 0; iparNeigh < numNeighPars; ++iparNeigh)
-            {
-              //Check address to make sure densities are computed only once per pair
-              if(&neigh->p[iparNeigh % PARTICLES_PER_CELL] < &cell->p[ipar % PARTICLES_PER_CELL])
-              {
-                float distSq = (cell->p[ipar % PARTICLES_PER_CELL] - neigh->p[iparNeigh % PARTICLES_PER_CELL]).GetLengthSq();
-                if(distSq < hSq)
-                {
-                  float t = hSq - distSq;
-                  float tc = t*t*t;
-                  cell->density[ipar % PARTICLES_PER_CELL] += tc;
-                  neigh->density[iparNeigh % PARTICLES_PER_CELL] += tc;
-                }
-              }
-              //move pointer to next cell in list if end of array is reached
-              if(iparNeigh % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
-                neigh = neigh->next;
-              }
-            }
-          }
-          //move pointer to next cell in list if end of array is reached
-          if(ipar % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {            
+          // clear their density value
+          cell->density[j % PARTICLES_PER_CELL] = 0.0;
+
+          // set their accelaretion to the defaults
+          cell->a[j % PARTICLES_PER_CELL] = externalAcceleration;
+
+          // move pointer to next cell in list if end of array is reached
+          if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
             cell = cell->next;
           }
         }
+          
+        // initialize the mutexes
+        omp_init_lock(&cell_mutexes[i]);
       }
-    }
-  }
+
+      // for all particles in the grid we will update their densities
+      #pragma omp for ordered schedule(static) 
+      for(int cindex=0; cindex<(nz*ny*nx); ++cindex)
+      {
+          // array of neigbours (counts them)
+          int neighCells[27];
+
+          // grid coordinates
+          int ck = ( cindex-cindex % (nx*ny) ) / (ny*nx);
+          int cj = ( (cindex-cindex%nx) / nx ) % ny;
+          int ci = cindex % nx;
+
+          // number of particles for this cell
+          int np = cnumPars[cindex];
+
+          // if np is zero there is no need to proceed,
+          // we continue to the next iteration
+          if(np == 0) {
+            continue;
+          }
+
+          // get the neighbours and update the neighCells array
+          int numNeighCells = GetNeighborCells(ci, cj, ck, neighCells);
+
+          // lock the mutex for this cell
+          omp_set_lock(&cell_mutexes[cindex]);
+
+          // get a pointer to the cell we want to update
+          Cell *cell = &cells[cindex];
+
+          // for all the particles of this cell
+          for(int ipar = 0; ipar < np; ++ipar)
+          {
+              // for all the neighbours
+              for(int inc = 0; inc < numNeighCells; ++inc)
+              {
+                  // get the neighbour's index
+                  int cindexNeigh = neighCells[inc];
+                  
+                  // if the neighbour is not our initial cell
+                  // then lock this critical section
+                  if (cindex != cindexNeigh) {
+                    omp_set_lock(&cell_mutexes[cindexNeigh]);
+                  }   
+                  
+                  // get a pointer to the neighbour's cell
+                  Cell *neigh = &cells[cindexNeigh];
+
+                  // get the number of particles in the 
+                  // neighbour's cell
+                  int numNeighPars = cnumPars[cindexNeigh];
+
+                  // for all the paricles of the neighbour
+                  for(int iparNeigh = 0; iparNeigh < numNeighPars; ++iparNeigh)
+                  {
+                      // Check address to make sure densities are computed only once per pair
+                      if(&neigh->p[iparNeigh % PARTICLES_PER_CELL] < &cell->p[ipar % PARTICLES_PER_CELL])
+                      {
+                          // calculate the squared distance
+                          float distSq = (cell->p[ipar % PARTICLES_PER_CELL] - neigh->p[iparNeigh % PARTICLES_PER_CELL]).GetLengthSq();
+                          
+                          // if it is valid according to the variable we
+                          // set during the simulation's initialization
+                          if(distSq < hSq)
+                          {
+                            // calculating the distance difference
+                            float t = hSq - distSq;
+                            float tc = t*t*t; 
+               
+                            // update both this cell's density and the neighbour's
+                            cell->density[ipar % PARTICLES_PER_CELL] += (double)tc;
+                            neigh->density[iparNeigh % PARTICLES_PER_CELL] += (double)tc;
+                          }
+                      }
+
+                      // move pointer to next cell in list if end of array is reached
+                      if(iparNeigh % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
+                        neigh = neigh->next;
+                      }
+                  }// iparNeigh
+
+                  // if we locked the mutex, then unlock now
+                  if (cindex != cindexNeigh) {
+                    omp_unset_lock(&cell_mutexes[cindexNeigh]);
+                  }
+               }
+
+              // move pointer to next cell in list if end of array is reached
+              if(ipar % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {    
+                cell = cell->next;
+              }
+
+          }// ipar
+
+          // release the lock on this cell
+          omp_unset_lock(&cell_mutexes[cindex]);
+
+      }// cindex
+  }// omp parallel
+
+
+  int cindex = 0;
+  int neighCells[27];
 
   const float tc = hSq*hSq*hSq;
   for(int i = 0; i < numCells; ++i)
@@ -616,11 +698,14 @@ void ComputeForces()
     {
       cell->density[j % PARTICLES_PER_CELL] += tc;
       cell->density[j % PARTICLES_PER_CELL] *= densityCoeff;
-      //move pointer to next cell in list if end of array is reached
+
+      // move pointer to next cell in list if end of array is reached
       if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
         cell = cell->next;
       }
     }
+
+    omp_destroy_lock(&cell_mutexes[i]);
   }
 
   cindex = 0;

@@ -595,7 +595,7 @@ void ComputeForces()
       }
         
       // initialize the mutexes
-      // omp_init_lock(&cell_mutexes[i]);
+      omp_init_lock(&cell_mutexes[i]);
     }
 
     // for all particles in the grid we will update their densities
@@ -831,19 +831,24 @@ void ComputeForces()
 }// ComputeForces
 
 ////////////////////////////////////////////////////////////////////////////////
-// ProcessCollisions() with container walls
-// Under the assumptions that
-// a) a particle will not penetrate a wall
-// b) a particle will not migrate further than once cell
-// c) the parSize is smaller than a cell
-// then only the particles at the perimiters may be influenced by the walls
 #if 0
+/**
+ * @brief Alternate process collision function with the below features:
+ * ProcessCollisions() with container walls
+ * Under the assumptions that
+ * a) a particle will not penetrate a wall
+ * b) a particle will not migrate further than once cell
+ * c) the parSize is smaller than a cell
+ * then only the particles at the perimiters may be influenced by the walls 
+ */
 void ProcessCollisions()
 {
+  #pragma omp for schedule(static)
 	for(int i = 0; i < numCells; ++i)
 	{
         Cell *cell = &cells[i];
         int np = cnumPars[i];
+
         for(int j = 0; j < np; ++j)
         {
           Vec3 pos = cell->p[j % PARTICLES_PER_CELL] + cell->hv[j % PARTICLES_PER_CELL] * timeStep;
@@ -891,6 +896,7 @@ void ProcessCollisions()
 
 /**
  * @brief Processing the particle collisions for each one of the dimensions
+ * for domainMax
  */
 void ProcessCollisions()
 {
@@ -1152,158 +1158,269 @@ void ProcessCollisions()
           }// x
       }// section
   } // omp section
-} // end of function
+} // ProcessCollisions
 
 #define USE_ImpeneratableWall
 #if defined(USE_ImpeneratableWall)
+
+/**
+ * @brief Processing the particle collisions for each one of the dimensions
+ * for domainMin
+ */
 void ProcessCollisions2()
 {
 	int x,y,z;
-	x=0;	// along the domainMin.x wall
-	for(y=0; y<ny; ++y)
-	{
-		for(z=0; z<nz; ++z)
-		{
-			int ci = (z*ny + y)*nx + x;
-			Cell *cell = &cells[ci];
-			int np = cnumPars[ci];
-			for(int j = 0; j < np; ++j)
-			{
-				int ji = j % PARTICLES_PER_CELL;
-				float diff = cell->p[ji].x - domainMin.x;
-				if(diff < Zero)
-				{
-					cell->p[ji].x = domainMin.x - diff;
-					cell->v[ji].x = -cell->v[ji].x;
-					cell->hv[ji].x = -cell->hv[ji].x;
-				}
-				//move pointer to next cell in list if end of array is reached
-				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-					cell = cell->next;
-			}
-		}
-	}
-	x=nx-1;	// along the domainMax.x wall
-	for(y=0; y<ny; ++y)
-	{
-		for(z=0; z<nz; ++z)
-		{
-			int ci = (z*ny + y)*nx + x;
-			Cell *cell = &cells[ci];
-			int np = cnumPars[ci];
-			for(int j = 0; j < np; ++j)
-			{
-				int ji = j % PARTICLES_PER_CELL;
-				float diff = domainMax.x - cell->p[ji].x;
-				if(diff < Zero)
-				{
-					cell->p[ji].x = domainMax.x + diff;
-					cell->v[ji].x = -cell->v[ji].x;
-					cell->hv[ji].x = -cell->hv[ji].x;
-				}
-				//move pointer to next cell in list if end of array is reached
-				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-					cell = cell->next;
-			}
-		}
-	}
-	y=0;	// along the domainMin.y wall
-	for(x=0; x<nx; ++x)
-{
-	for(z=0; z<nz; ++z)
-		{
-			int ci = (z*ny + y)*nx + x;
-			Cell *cell = &cells[ci];
-			int np = cnumPars[ci];
-			for(int j = 0; j < np; ++j)
-			{
-				int ji = j % PARTICLES_PER_CELL;
-				float diff = cell->p[ji].y - domainMin.y;
-				if(diff < Zero)
-				{
-					cell->p[ji].y = domainMin.y - diff;
-					cell->v[ji].y = -cell->v[ji].y;
-					cell->hv[ji].y = -cell->hv[ji].y;
-				}
-				//move pointer to next cell in list if end of array is reached
-				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-					cell = cell->next;
-			}
-		}
-	}
-	y=ny-1;	// along the domainMax.y wall
-	for(x=0; x<nx; ++x)
-	{
-		for(z=0; z<nz; ++z)
-		{
-			int ci = (z*ny + y)*nx + x;
-			Cell *cell = &cells[ci];
-			int np = cnumPars[ci];
-			for(int j = 0; j < np; ++j)
-			{
-				int ji = j % PARTICLES_PER_CELL;
-				float diff = domainMax.y - cell->p[ji].y;
-				if(diff < Zero)
-				{
-					cell->p[ji].y = domainMax.y + diff;
-					cell->v[ji].y = -cell->v[ji].y;
-					cell->hv[ji].y = -cell->hv[ji].y;
-				//move pointer to next cell in list if end of array is reached
-				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-					cell = cell->next;
-				}
-			}
-		}
-	}
-	z=0;	// along the domainMin.z wall
-	for(x=0; x<nx; ++x)
-	{
-		for(y=0; y<ny; ++y)
-		{
-			int ci = (z*ny + y)*nx + x;
-			Cell *cell = &cells[ci];
-			int np = cnumPars[ci];
-			for(int j = 0; j < np; ++j)
-			{
-				int ji = j % PARTICLES_PER_CELL;
-				float diff = cell->p[ji].z - domainMin.z;
-				if(diff < Zero)
-				{
-					cell->p[ji].z = domainMin.z - diff;
-					cell->v[ji].z = -cell->v[ji].z;
-					cell->hv[ji].z = -cell->hv[ji].z;
-				}
-				//move pointer to next cell in list if end of array is reached
-				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-					cell = cell->next;
-			}
-		}
-	}
-	z=nz-1;	// along the domainMax.z wall
-	for(x=0; x<nx; ++x)
-	{
-		for(y=0; y<ny; ++y)
-		{
-			int ci = (z*ny + y)*nx + x;
-			Cell *cell = &cells[ci];
-			int np = cnumPars[ci];
-			for(int j = 0; j < np; ++j)
-			{
-				int ji = j % PARTICLES_PER_CELL;
-				float diff = domainMax.z - cell->p[ji].z;
-				if(diff < Zero)
-				{
-					cell->p[ji].z = domainMax.z + diff;
-					cell->v[ji].z = -cell->v[ji].z;
-					cell->hv[ji].z = -cell->hv[ji].z;
-				}
-				//move pointer to next cell in list if end of array is reached
-				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-					cell = cell->next;
-			}
-		}
-	}
-}
+
+  #pragma omp sections
+  {
+      #pragma omp section
+      {
+        	x=0;	// along the domainMin.x wall
+        	for(y=0; y<ny; ++y)
+        	{
+          		for(z=0; z<nz; ++z)
+          		{
+                  // calculating the corresponding index
+                  int ci = (z*ny + y)*nx + x;
+
+                  // getting a pointer to this cell
+                  Cell *cell = &cells[ci];
+
+                  // getting the number of particles
+                  int np = cnumPars[ci];
+
+                  // iterating for all the particles
+            			for(int j = 0; j < np; ++j)
+            			{
+                      // getting particle position in the cell 
+              				int ji = j % PARTICLES_PER_CELL;
+
+                      // calculating the distance between the cell and the domainMin
+              				float diff = cell->p[ji].x - domainMin.x;
+
+                      // checking if we hit a wall so that we reflect
+                      // the particle by setting the oposite speeds
+              				if(diff < Zero) {
+              					cell->p[ji].x = domainMin.x - diff;
+              					cell->v[ji].x = -cell->v[ji].x;
+              					cell->hv[ji].x = -cell->hv[ji].x;
+              				}
+
+              				// move pointer to next cell in list if end of array is reached
+              				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
+              					cell = cell->next;
+                      }
+            			}// j
+          		}// z
+        	}// y
+      }// section
+
+      #pragma omp section
+      {
+        	x=nx-1;	// along the domainMax.x wall
+        	for(y=0; y<ny; ++y)
+        	{
+          		for(z=0; z<nz; ++z)
+          		{
+                  // calculating the corresponding index
+                  int ci = (z*ny + y)*nx + x;
+
+                  // getting a pointer to this cell
+                  Cell *cell = &cells[ci];
+
+                  // getting the number of particles
+                  int np = cnumPars[ci];
+
+                  // iterating for all the particles
+            			for(int j = 0; j < np; ++j)
+            			{
+                      // getting particle position in the cell
+              				int ji = j % PARTICLES_PER_CELL;
+
+                      // calculating the distance between the cell and the domainMin
+              				float diff = domainMax.x - cell->p[ji].x;
+
+                      // checking if we hit a wall so that we reflect
+                      // the particle by setting the oposite speeds
+              				if(diff < Zero) {
+              					cell->p[ji].x = domainMax.x + diff;
+              					cell->v[ji].x = -cell->v[ji].x;
+              					cell->hv[ji].x = -cell->hv[ji].x;
+              				}
+
+              				// move pointer to next cell in list if end of array is reached
+              				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
+              					cell = cell->next;
+            			}// j
+          		}// z
+        	}// y
+      }// section
+    	
+      #pragma omp section
+      {
+          y=0;	// along the domainMin.y wall
+        	for(x=0; x<nx; ++x)
+          {
+            	for(z=0; z<nz; ++z)
+            	{
+                  // calculating the corresponding index
+                  int ci = (z*ny + y)*nx + x;
+
+                  // getting a pointer to this cell
+                  Cell *cell = &cells[ci];
+
+                  // getting the number of particles
+                  int np = cnumPars[ci];
+
+                  // iterating for all the particles
+            			for(int j = 0; j < np; ++j)
+            			{
+                      // getting particle position in the cell
+              				int ji = j % PARTICLES_PER_CELL;
+
+                      // calculating the distance between the cell and the domainMin
+              				float diff = cell->p[ji].y - domainMin.y;
+
+                      // checking if we hit a wall so that we reflect
+                      // the particle by setting the oposite speeds
+              				if(diff < Zero) {
+              					cell->p[ji].y = domainMin.y - diff;
+              					cell->v[ji].y = -cell->v[ji].y;
+              					cell->hv[ji].y = -cell->hv[ji].y;
+              				}
+
+              				// move pointer to next cell in list if end of array is reached
+              				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
+              					cell = cell->next;
+            			}// j
+            	}// z
+        	 }// x
+      }// section
+
+      #pragma omp section
+      {
+          y=ny-1;	// along the domainMax.y wall
+          for(x=0; x<nx; ++x)
+          {
+            	for(z=0; z<nz; ++z)
+            	{
+                  // calculating the corresponding index
+                  int ci = (z*ny + y)*nx + x;
+
+                  // getting a pointer to this cell
+                  Cell *cell = &cells[ci];
+
+                  // getting the number of particles
+                  int np = cnumPars[ci];
+
+                  // iterating for all the particles
+              		for(int j = 0; j < np; ++j)
+              		{
+                      // getting particle position in the cell
+                			int ji = j % PARTICLES_PER_CELL;
+
+                      // calculating the distance between the cell and the domainMin
+                			float diff = domainMax.y - cell->p[ji].y;
+
+                      // checking if we hit a wall so that we reflect
+                      // the particle by setting the oposite speeds
+                			if(diff < Zero) {
+                				cell->p[ji].y = domainMax.y + diff;
+                				cell->v[ji].y = -cell->v[ji].y;
+                				cell->hv[ji].y = -cell->hv[ji].y;                          
+                      }
+
+                			// move pointer to next cell in list if end of array is reached
+                			if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
+                				cell = cell->next;
+              		}// j
+            	}// z
+          }// x
+      }// section
+
+      #pragma omp section
+      {
+        	z=0;	// along the domainMin.z wall
+        	for(x=0; x<nx; ++x)
+        	{
+          		for(y=0; y<ny; ++y)
+          		{
+                  // calculating the corresponding index
+                  int ci = (z*ny + y)*nx + x;
+
+                  // getting a pointer to this cell
+                  Cell *cell = &cells[ci];
+
+                  // getting the number of particles
+                  int np = cnumPars[ci];
+
+                  // iterating for all the particles
+            			for(int j = 0; j < np; ++j)
+            			{
+                      // getting particle position in the cell
+              				int ji = j % PARTICLES_PER_CELL;
+
+                      // calculating the distance between the cell and the domainMin
+              				float diff = cell->p[ji].z - domainMin.z;
+
+                      // checking if we hit a wall so that we reflect
+                      // the particle by setting the oposite speeds
+              				if(diff < Zero) {
+              					cell->p[ji].z = domainMin.z - diff;
+              					cell->v[ji].z = -cell->v[ji].z;
+              					cell->hv[ji].z = -cell->hv[ji].z;
+              				}
+
+              				// move pointer to next cell in list if end of array is reached
+              				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
+              					cell = cell->next;
+            			}// j
+          		}// y
+        	}// x
+      }// section
+
+      #pragma omp section
+      {
+        	z=nz-1;	// along the domainMax.z wall
+        	for(x=0; x<nx; ++x)
+        	{
+          		for(y=0; y<ny; ++y)
+          		{
+                  // calculating the corresponding index
+                  int ci = (z*ny + y)*nx + x;
+
+                  // getting a pointer to this cell
+                  Cell *cell = &cells[ci];
+
+                  // getting the number of particles
+                  int np = cnumPars[ci];
+
+                  // iterating for all the particles
+            			for(int j = 0; j < np; ++j)
+            			{
+                      // getting particle position in the cell
+              				int ji = j % PARTICLES_PER_CELL;
+
+                      // calculating the distance between the cell and the domainMin
+              				float diff = domainMax.z - cell->p[ji].z;
+
+                      // checking if we hit a wall so that we reflect
+                      // the particle by setting the oposite speeds
+              				if(diff < Zero) {
+              					cell->p[ji].z = domainMax.z + diff;
+              					cell->v[ji].z = -cell->v[ji].z;
+              					cell->hv[ji].z = -cell->hv[ji].z;
+              				}
+
+              				// move pointer to next cell in list if end of array is reached
+              				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
+              					cell = cell->next;
+            			}// j
+          		}// y
+        	}// x
+      }// section
+  }// sections
+}// ProcessCollisions2
 #endif
 #endif
 
@@ -1320,7 +1437,7 @@ void AdvanceParticles()
 
   // iterating through the cells
   // moving them accordingly
-  #pragma omp parallel for schedule(static, 2) private(cell, np, j)
+  #pragma omp for schedule(static, 2) private(cell, np, j)
   for(int i = 0; i < numCells; ++i)
   {
     cell = &cells[i];
@@ -1350,38 +1467,54 @@ void AdvanceParticles()
 }// AdvanceParticles
 
 ////////////////////////////////////////////////////////////////////////////////
-
+/**
+ * @brief Calls the below functions in order to build the grid, compute the 
+ * forces in the fluid, process the collisions and move the particles around.
+ * This function is the one that holds the simulation together by calling the 
+ * appropriate functions
+ */
 void AdvanceFrame()
 {
   RebuildGrid();
 
-#pragma omp parallel
-{
-  ComputeForces();
-  ProcessCollisions();
-}// omp parallel
+  #pragma omp parallel
+  {
+    ComputeForces();
+    ProcessCollisions();
+    AdvanceParticles();
 
-  AdvanceParticles();
+  #if defined(USE_ImpeneratableWall)
+    // N.B. The integration of the position can place the particle
+    // outside the domain. We now make a pass on the perimiter cells
+    // to account for particle migration beyond domain.
+    ProcessCollisions2();
+  #endif
 
-#if defined(USE_ImpeneratableWall)
-  // N.B. The integration of the position can place the particle
-  // outside the domain. We now make a pass on the perimiter cells
-  // to account for particle migration beyond domain.
-  ProcessCollisions2();
-#endif
-#ifdef ENABLE_STATISTICS
-  float mean, stddev;
-  int i;
+  #ifdef ENABLE_STATISTICS
+    float mean, stddev;
+    int i;
 
-  mean = (float)numParticles/(float)numCells;
-  stddev = 0.0;
-  for(i=0; i<numCells; i++) {
-    stddev += (mean-cnumPars[i])*(mean-cnumPars[i]);
-  }
-  stddev = sqrtf(stddev);
-  std::cout << "Cell statistics: mean=" << mean << " particles, stddev=" << stddev << " particles." << std::endl;
-#endif
-}
+    #pragma omp master
+    {
+      mean = (float)numParticles/(float)numCells;
+      stddev = 0.0;
+    }
+
+    #pragma omp for schedule(static)
+    for(i=0; i<numCells; i++) {
+      #pragma omp atomic
+      stddev += (mean-cnumPars[i])*(mean-cnumPars[i]);
+    }
+
+    #pragma omp master
+    {
+      stddev = sqrtf(stddev);
+      std::cout << "Cell statistics: mean=" << mean << " particles, stddev=" << stddev << " particles." << std::endl;
+    }
+  #endif
+
+  }// omp parallel
+}// AdvanceFrame
 
 ////////////////////////////////////////////////////////////////////////////////
 /**

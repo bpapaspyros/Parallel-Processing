@@ -60,29 +60,29 @@ static inline int bswap_int32(int x) {
 class Vec3
 {
 public:
-  float x, y, z;
+  double x, y, z;
 
   Vec3() {}
-  Vec3(float _x, float _y, float _z) : x(_x), y(_y), z(_z) {}
+  Vec3(double _x, double _y, double _z) : x(_x), y(_y), z(_z) {}
 
-  float  GetLengthSq() const         { return x*x + y*y + z*z; }
-  float  GetLength() const           { return sqrtf(GetLengthSq()); }
+  double  GetLengthSq() const         { return x*x + y*y + z*z; }
+  double  GetLength() const           { return sqrtf(GetLengthSq()); }
   Vec3 &  Normalize()                 { return *this /= GetLength(); }
 
   bool    operator == (Vec3 const &v) { return (x == v.x) && (y == v.y) && (z += v.z); }
   Vec3 &  operator += (Vec3 const &v) { x += v.x;  y += v.y; z += v.z; return *this; }
   Vec3 &  operator -= (Vec3 const &v) { x -= v.x;  y -= v.y; z -= v.z; return *this; }
-  Vec3 &  operator *= (float s)      { x *= s;  y *= s; z *= s; return *this; }
-  Vec3 &  operator /= (float s)      { float tmp = 1.f/s; x *= tmp;  y *= tmp; z *= tmp; return *this; }
+  Vec3 &  operator *= (double s)      { x *= s;  y *= s; z *= s; return *this; }
+  Vec3 &  operator /= (double s)      { double tmp = 1.f/s; x *= tmp;  y *= tmp; z *= tmp; return *this; }
 
   Vec3    operator + (Vec3 const &v) const    { return Vec3(x+v.x, y+v.y, z+v.z); }
-  Vec3    operator + (float const &f) const  { return Vec3(x+f, y+f, z+f); }
+  Vec3    operator + (double const &f) const  { return Vec3(x+f, y+f, z+f); }
   Vec3    operator - () const                 { return Vec3(-x, -y, -z); }
   Vec3    operator - (Vec3 const &v) const    { return Vec3(x-v.x, y-v.y, z-v.z); }
-  Vec3    operator * (float s) const         { return Vec3(x*s, y*s, z*s); }
-  Vec3    operator / (float s) const         { float tmp = 1.f/s; return Vec3(x*tmp, y*tmp, z*tmp); }
+  Vec3    operator * (double s) const         { return Vec3(x*s, y*s, z*s); }
+  Vec3    operator / (double s) const         { double tmp = 1.f/s; return Vec3(x*tmp, y*tmp, z*tmp); }
 
-  float  operator * (Vec3 const &v) const    { return x*v.x + y*v.y + z*v.z; }
+  double  operator * (Vec3 const &v) const    { return x*v.x + y*v.y + z*v.z; }
 };
 
 

@@ -97,7 +97,7 @@ Cell *cellpool_getcell(cellpool *pool) {
 
   assert(pool != NULL);
 
-  //If no more cells available then allocate more
+  // If no more cells available then allocate more
   if(pool->cells == NULL) {
     //keep doubling the number of cells
     struct datablockhdr *block = cellpool_allocblock(pool->alloc);
@@ -107,7 +107,7 @@ Cell *cellpool_getcell(cellpool *pool) {
     pool->cells = (struct Cell *)(pool->datablocks + 1);
   }
 
-  //return first cell in list
+  // return first cell in list
   temp = pool->cells;
   pool->cells = temp->next;
   temp->next = NULL;
@@ -178,11 +178,11 @@ void cellpool_destroy(cellpool *pool) {
 #include <stdio.h>
 
 //constants to compute  contents of array elements (based on type of array)
-const float p_vec_const = 0.0;
-const float hv_vec_const = 1.0;
-const float v_vec_const = 2.0;
-const float a_vec_const = 3.0;
-const float density_vec_const = 0.1;
+const double p_vec_const = 0.0;
+const double hv_vec_const = 1.0;
+const double v_vec_const = 2.0;
+const double a_vec_const = 3.0;
+const double density_vec_const = 0.1;
 const Vec3 coord_const(-1.1, -2.2, -3.3);
 
 //fill a cell with constant, predetermined data

@@ -29,16 +29,16 @@ bTimer b;
 #include "view.hpp"
 #endif
 
-void CleanUpSim(void);
-void RebuildGrid(void);
-void AdvanceFrame(void);
-void ComputeForces(void);
-void ProcessCollisions(void);
-void ProcessCollisions2(void);
-void AdvanceParticles(void);
-void InitSim(char const *fileName);
-void SaveFile(char const *fileName);
-int GetNeighborCells(int ci, int cj, int ck, int *neighCells);
+void CleanUpSim(void);                // freeing up allocated memory
+void RebuildGrid(void);               // rebuilding the simulation's grid
+void AdvanceFrame(void);              // calls functions in order to advance a frame of the simulation
+void ComputeForces(void);             // computes the forces invoked in a frame
+void ProcessCollisions(void);         // processes collision concerning the domainMax
+void ProcessCollisions2(void);        // processes collision concerning the domainMin
+void AdvanceParticles(void);          // after having computed all the necessary values, move the particles
+void InitSim(char const *fileName);   // initializes the simulation
+void SaveFile(char const *fileName);  // writes the results in a file
+int GetNeighborCells(int ci, int cj, int ck, int *neighCells);  // gets the indexes of the neighbours in an array
 
 
 //Uncomment to add code to check that Courant–Friedrichs–Lewy condition is satisfied at runtime
@@ -49,6 +49,7 @@ int GetNeighborCells(int ci, int cj, int ck, int *neighCells);
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// pool of cells
 cellpool pool;
 
 // setting the simulation variables concerning the physics
@@ -56,17 +57,18 @@ float restParticlesPerMeter, h, hSq;
 float densityCoeff, pressureCoeff, viscosityCoeff;
 static float timeStep = 0.001;
 
-int nx, ny, nz;       // number of grid cells in each dimension
-Vec3 delta;           // cell dimensions
-int numParticles = 0; // number of particles
-int numCells = 0;     // number of cells
-Cell *cells = NULL;   // array of cells
-Cell *cells2 = NULL;  // helper array of cells
-int *cnumPars = 0;    // array of particles
-int *cnumPars2 = 0;   // helper array of particles
-Cell **last_cells = NULL; // helper array with pointers to last cell structure of "cells" array lists
+int nx, ny, nz;               // number of grid cells in each dimension
+Vec3 delta;                   // cell dimensions
+int numParticles = 0;         // number of particles
+int numCells = 0;             // number of cells
+Cell *cells = NULL;           // array of cells
+Cell *cells2 = NULL;          // helper array of cells
+int *cnumPars = 0;            // array of particles
+int *cnumPars2 = 0;           // helper array of particles
+Cell **last_cells = NULL;     // helper array with pointers to last cell structure of "cells" array lists
 omp_lock_t *cell_mutexes = 0; // array of mutexes for future use in race conditions
 
+// visualization initial values
 #ifdef ENABLE_VISUALIZATION
 Vec3 vMax(0.0,0.0,0.0);
 Vec3 vMin(0.0,0.0,0.0);
@@ -75,7 +77,7 @@ Vec3 vMin(0.0,0.0,0.0);
 ////////////////////////////////////////////////////////////////////////////////
 /**
  * @brief Initializing the simulation's variables paying attention to the cache 
- * line's size depending on the system we are runnning on. The variables of the
+ * line's size depending on the system we are running on. The variables of the
  * simulation are initialized according to the given input file
  *
  * @param char const filename (input file with simulation parameters) 
@@ -155,7 +157,7 @@ void InitSim(char const *fileName)
   assert(delta.x >= h && delta.y >= h && delta.z >= h);
 
   /* making some cache adjustments to increace the hit ratio */
-  // make sure Cell structure is multiple of estiamted cache line size
+  // make sure Cell structure is multiple of estimated cache line size
   assert(sizeof(Cell) % CACHELINE_SIZE == 0);
   
   // make sure helper Cell structure is in sync with real Cell structure
@@ -182,7 +184,7 @@ void InitSim(char const *fileName)
 
   // because cells and cells2 are not allocated via new
   // we construct them here
-    // running the loop parallely
+    // running the loop in parallel
     // each thread creates approximately equal number of cells
     // unless it the size is small enough to run single threaded
   if (numCells > 12000) {
@@ -330,14 +332,23 @@ void SaveFile(char const *fileName)
   }
 
   int count = 0;
+
+  // iterate through the cells to write their data to a file
   for(int i = 0; i < numCells; ++i)
   {
+    // get a pointer to the cell of index i
     Cell *cell = &cells[i];
+
+    // get this cells number of particles
     int np = cnumPars[i];
+   
+    // iterate through all those particles 
     for(int j = 0; j < np; ++j)
     {
       //Always use single precision float variables b/c file format uses single precision
       float px, py, pz, hvx, hvy, hvz, vx,vy, vz;
+     
+      // check if we need to save as big endian
       if(!isLittleEndian()) {
         px  = bswap_float((float)(cell->p[j % PARTICLES_PER_CELL].x));
         py  = bswap_float((float)(cell->p[j % PARTICLES_PER_CELL].y));
@@ -359,6 +370,8 @@ void SaveFile(char const *fileName)
         vy  = (float)(cell->v[j % PARTICLES_PER_CELL].y);
         vz  = (float)(cell->v[j % PARTICLES_PER_CELL].z);
       }
+
+      // write the to the file
       file.write((char *)&px,  FILE_SIZE_FLOAT);
       file.write((char *)&py,  FILE_SIZE_FLOAT);
       file.write((char *)&pz,  FILE_SIZE_FLOAT);
@@ -368,14 +381,17 @@ void SaveFile(char const *fileName)
       file.write((char *)&vx,  FILE_SIZE_FLOAT);
       file.write((char *)&vy,  FILE_SIZE_FLOAT);
       file.write((char *)&vz,  FILE_SIZE_FLOAT);
+
       ++count;
 
-      //move pointer to next cell in list if end of array is reached
+      // move pointer to next cell in list if end of array is reached
       if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
         cell = cell->next;
       }
     }
   }
+
+  // checking if we wrote as many particles as we read
   assert(count == numParticles);
 }
 
@@ -386,6 +402,7 @@ void SaveFile(char const *fileName)
 void CleanUpSim()
 {
   // first return extended cells to cell pools
+  #pragma omp parallel for ordered schedule(static, 100)
   for(int i=0; i<numCells; ++i)
   {
     Cell& cell = cells[i];
@@ -426,109 +443,126 @@ void CleanUpSim()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-
+/**
+ * @brief Rebuilds the grid by setting the positions of the particles
+ * after having invoked forces and collisions on them
+ */
 void RebuildGrid()
 {
-  //swap src and dest arrays with particles
-  std::swap(cells, cells2);
-  //swap src and dest arrays with counts of particles
-  std::swap(cnumPars, cnumPars2);
-  // Note, in parallel versions the above swaps may
-  // occure outside RebuildGrid()
+  #pragma omp single
+  {
+    //swap src and dest arrays with particles
+    std::swap(cells, cells2);
+    
+    //swap src and dest arrays with counts of particles
+    std::swap(cnumPars, cnumPars2);
 
-  //initialize destination data structures
-  memset(cnumPars, 0, numCells*sizeof(int));
+    //initialize destination data structures
+    memset(cnumPars, 0, numCells*sizeof(int));
+  }
+  
+  #pragma omp for schedule(static, 2)
   for(int i=0; i<numCells; i++)
   {
     cells[i].next = NULL;
     last_cells[i] = &cells[i];
   }
 
-  //iterate through source cell lists
-  for(int i = 0; i < numCells; ++i)
+  #pragma omp single
   {
-    Cell *cell2 = &cells2[i];
-    int np2 = cnumPars2[i];
-    //iterate through source particles
-    for(int j = 0; j < np2; ++j)
+    // iterate through source cell lists
+    for(int i = 0; i < numCells; ++i)
     {
-      //get destination for source particle
-      int ci = (int)((cell2->p[j % PARTICLES_PER_CELL].x - domainMin.x) / delta.x);
-      int cj = (int)((cell2->p[j % PARTICLES_PER_CELL].y - domainMin.y) / delta.y);
-      int ck = (int)((cell2->p[j % PARTICLES_PER_CELL].z - domainMin.z) / delta.z);
-	  // confine to domain
-	  // Note, if ProcessCollisions() is working properly these tests are useless
-      if(ci < 0) ci = 0; else if(ci >= nx) ci = nx-1;
-      if(cj < 0) cj = 0; else if(cj >= ny) cj = ny-1;
-      if(ck < 0) ck = 0; else if(ck >= nz) ck = nz-1;
+      // get a pointer to the cell
+      Cell *cell2 = &cells2[i];
 
-#ifdef ENABLE_CFL_CHECK
-      //check that source cell is a neighbor of destination cell
-      bool cfl_cond_satisfied=false;
-      for(int di = -1; di <= 1; ++di)
-        for(int dj = -1; dj <= 1; ++dj)
-          for(int dk = -1; dk <= 1; ++dk)
-          {
-            int ii = ci + di;
-            int jj = cj + dj;
-            int kk = ck + dk;
-            if(ii >= 0 && ii < nx && jj >= 0 && jj < ny && kk >= 0 && kk < nz)
+      // get the number of particles of this cell
+      int np2 = cnumPars2[i];
+
+      // iterate through source particles
+      for(int j = 0; j < np2; ++j)
+      {
+        // get destination for source particle
+        int ci = (int)((cell2->p[j % PARTICLES_PER_CELL].x - domainMin.x) / delta.x);
+        int cj = (int)((cell2->p[j % PARTICLES_PER_CELL].y - domainMin.y) / delta.y);
+        int ck = (int)((cell2->p[j % PARTICLES_PER_CELL].z - domainMin.z) / delta.z);
+      
+          // confine to domain
+          // Note, if ProcessCollisions() is working properly these tests are useless
+        if(ci < 0) ci = 0; else if(ci >= nx) ci = nx-1;
+        if(cj < 0) cj = 0; else if(cj >= ny) cj = ny-1;
+        if(ck < 0) ck = 0; else if(ck >= nz) ck = nz-1;
+
+  #ifdef ENABLE_CFL_CHECK
+        // check that source cell is a neighbor of destination cell
+        bool cfl_cond_satisfied=false;
+        for(int di = -1; di <= 1; ++di)
+          for(int dj = -1; dj <= 1; ++dj)
+            for(int dk = -1; dk <= 1; ++dk)
             {
-              int index = (kk*ny + jj)*nx + ii;
-              if(index == i)
+              int ii = ci + di;
+              int jj = cj + dj;
+              int kk = ck + dk;
+              if(ii >= 0 && ii < nx && jj >= 0 && jj < ny && kk >= 0 && kk < nz)
               {
-                cfl_cond_satisfied=true;
-                break;
+                int index = (kk*ny + jj)*nx + ii;
+                if(index == i)
+                {
+                  cfl_cond_satisfied=true;
+                  break;
+                }
               }
             }
-          }
-      if(!cfl_cond_satisfied)
-      {
-        std::cerr << "FATAL ERROR: Courant–Friedrichs–Lewy condition not satisfied." << std::endl;
-        exit(1);
-      }
-#endif //ENABLE_CFL_CHECK
-
-      //get last pointer in correct destination cell list
-      int index = (ck*ny + cj)*nx + ci;
-      Cell *cell = last_cells[index];
-      int np = cnumPars[index];
-
-      //add another cell structure if everything full
-      if( (np % PARTICLES_PER_CELL == 0) && (cnumPars[index] != 0) ) {
-        cell->next = cellpool_getcell(&pool);
-        cell = cell->next;
-        last_cells[index] = cell;
-      }
-      ++cnumPars[index];
-
-      //copy source to destination particle
-      cell->p[np % PARTICLES_PER_CELL].x = cell2->p[j % PARTICLES_PER_CELL].x;
-      cell->p[np % PARTICLES_PER_CELL].y = cell2->p[j % PARTICLES_PER_CELL].y;
-      cell->p[np % PARTICLES_PER_CELL].z = cell2->p[j % PARTICLES_PER_CELL].z;
-      cell->hv[np % PARTICLES_PER_CELL].x = cell2->hv[j % PARTICLES_PER_CELL].x;
-      cell->hv[np % PARTICLES_PER_CELL].y = cell2->hv[j % PARTICLES_PER_CELL].y;
-      cell->hv[np % PARTICLES_PER_CELL].z = cell2->hv[j % PARTICLES_PER_CELL].z;
-      cell->v[np % PARTICLES_PER_CELL].x = cell2->v[j % PARTICLES_PER_CELL].x;
-      cell->v[np % PARTICLES_PER_CELL].y = cell2->v[j % PARTICLES_PER_CELL].y;
-      cell->v[np % PARTICLES_PER_CELL].z = cell2->v[j % PARTICLES_PER_CELL].z;
-
-      //move pointer to next source cell in list if end of array is reached
-      if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
-        Cell *temp = cell2;
-        cell2 = cell2->next;
-        //return cells to pool that are not statically allocated head of lists
-        if(temp != &cells2[i]) {
-          cellpool_returncell(&pool, temp);
+        if(!cfl_cond_satisfied)
+        {
+          std::cerr << "FATAL ERROR: Courant–Friedrichs–Lewy condition not satisfied." << std::endl;
+          exit(1);
         }
-      }
+  #endif //ENABLE_CFL_CHECK
 
-    } // for(int j = 0; j < np2; ++j)
-    //return cells to pool that are not statically allocated head of lists
-    if((cell2 != NULL) && (cell2 != &cells2[i])) {
-      cellpool_returncell(&pool, cell2);
-    }
-  } // for(int i = 0; i < numCells; ++i)
+        // get last pointer in correct destination cell list
+        int index = (ck*ny + cj)*nx + ci;
+        Cell *cell = last_cells[index];
+        int np = cnumPars[index];
+
+        // add another cell structure if everything full
+        if( (np % PARTICLES_PER_CELL == 0) && (cnumPars[index] != 0) ) {
+          cell->next = cellpool_getcell(&pool);
+          cell = cell->next;
+          last_cells[index] = cell;
+        }
+        ++cnumPars[index];
+
+        // copy source to destination particle
+        cell->p[np % PARTICLES_PER_CELL].x = cell2->p[j % PARTICLES_PER_CELL].x;
+        cell->p[np % PARTICLES_PER_CELL].y = cell2->p[j % PARTICLES_PER_CELL].y;
+        cell->p[np % PARTICLES_PER_CELL].z = cell2->p[j % PARTICLES_PER_CELL].z;
+        cell->hv[np % PARTICLES_PER_CELL].x = cell2->hv[j % PARTICLES_PER_CELL].x;
+        cell->hv[np % PARTICLES_PER_CELL].y = cell2->hv[j % PARTICLES_PER_CELL].y;
+        cell->hv[np % PARTICLES_PER_CELL].z = cell2->hv[j % PARTICLES_PER_CELL].z;
+        cell->v[np % PARTICLES_PER_CELL].x = cell2->v[j % PARTICLES_PER_CELL].x;
+        cell->v[np % PARTICLES_PER_CELL].y = cell2->v[j % PARTICLES_PER_CELL].y;
+        cell->v[np % PARTICLES_PER_CELL].z = cell2->v[j % PARTICLES_PER_CELL].z;
+
+        // move pointer to next source cell in list if end of array is reached
+        if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
+          Cell *temp = cell2;
+          cell2 = cell2->next;
+
+          // return cells to pool that are not statically allocated head of lists
+          if(temp != &cells2[i]) {
+            cellpool_returncell(&pool, temp);
+          }
+        }
+
+      } // j
+
+      // return cells to pool that are not statically allocated head of lists
+      if((cell2 != NULL) && (cell2 != &cells2[i])) {
+        cellpool_returncell(&pool, cell2);
+      }
+    } // i
+  }// omp single
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1492,17 +1526,16 @@ void AdvanceParticles()
  */
 void AdvanceFrame()
 {
-  RebuildGrid();
-
   #pragma omp parallel
   {
+    RebuildGrid();
     ComputeForces();
     ProcessCollisions();
     AdvanceParticles();
 
   #if defined(USE_ImpeneratableWall)
     // N.B. The integration of the position can place the particle
-    // outside the domain. We now make a pass on the perimiter cells
+    // outside the domain. We now make a pass on the perimeter cells
     // to account for particle migration beyond domain.
     ProcessCollisions2();
   #endif
@@ -1523,13 +1556,12 @@ void AdvanceFrame()
       stddev += (mean-cnumPars[i])*(mean-cnumPars[i]);
     }
 
-    #pragma omp master
+    #pragma omp single
     {
       stddev = sqrtf(stddev);
       std::cout << "Cell statistics: mean=" << mean << " particles, stddev=" << stddev << " particles." << std::endl;
     }
   #endif
-
   }// omp parallel
 }// AdvanceFrame
 
@@ -1570,7 +1602,6 @@ int main(int argc, char *argv[])
 
   // if no visualization was enabled
 #ifndef ENABLE_VISUALIZATION
-
 
   // core of benchmark program (the Region-of-Interest)
   for(int i = 0; i < framenum; ++i)

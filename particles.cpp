@@ -5,6 +5,9 @@
 #include "bTimer.hpp"
 #include <unistd.h>
 bTimer b;
+
+
+#include <xmmintrin.h>
 //////
 
 
@@ -1551,7 +1554,7 @@ void AdvanceFrame()
     }
 
     #pragma omp for schedule(static)
-    for(i=0; i<numCells; i++) {
+    for(i=0; i<numCells; ++i) {
       #pragma omp atomic
       stddev += (mean-cnumPars[i])*(mean-cnumPars[i]);
     }

@@ -38,7 +38,7 @@ void ProcessCollisions2(void);        // processes collision concerning the doma
 void AdvanceParticles(void);          // after having computed all the necessary values, move the particles
 void InitSim(char const *fileName);   // initializes the simulation
 void SaveFile(char const *fileName);  // writes the results in a file
-int GetNeighborCells(int ci, int cj, int ck, int *neighCells);  // gets the indexes of the neighbours in an array
+inline int GetNeighborCells(int ci, int cj, int ck, int *neighCells);  // gets the indexes of the neighbours in an array
 
 
 //Uncomment to add code to check that Courant–Friedrichs–Lewy condition is satisfied at runtime
@@ -573,7 +573,7 @@ void RebuildGrid()
  * @param Grid coordinates of the cell (ci, cj, ck), neighCells
  * which is the array that will hold the neighbours' indexes
  */
-int GetNeighborCells(int ci, int cj, int ck, int *neighCells)
+inline int GetNeighborCells(int ci, int cj, int ck, int *neighCells)
 {
   // counter for the neighbour cells
   int numNeighCells = 0;

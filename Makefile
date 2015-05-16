@@ -5,7 +5,7 @@ CXX := g++
 # CXX := scorep g++
 
 # CXXFLAGS := -O3
-CXXFLAGS := -O3 -fopenmp -msse2
+CXXFLAGS := -O3 -fopenmp
 #CXXFLAGS := -g3
 CXXFLAGS := $(CXXFLAGS) -Wall -W -Wmissing-declarations -Wredundant-decls -Wdisabled-optimization -Wextra
 CXXFLAGS := $(CXXFLAGS) -Winline -Wpointer-arith -Wsign-compare -Wendif-labels

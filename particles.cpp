@@ -5,9 +5,6 @@
 #include "bTimer.hpp"
 #include <unistd.h>
 bTimer b;
-
-
-#include <xmmintrin.h>
 //////
 
 

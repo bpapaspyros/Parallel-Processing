@@ -111,7 +111,7 @@ public:
   }
 
   bool    operator == (Vec3 const &v) { 
-    return (x == v.x) && (y == v.y) && (z += v.z);  
+    return (x == v.x) && (y == v.y) && (z == v.z);  
   }
 
   Vec3 &  operator += (Vec3 const &v) { 
@@ -335,7 +335,7 @@ public:
   double  GetLength() const           { return sqrtf(GetLengthSq()); }
   Vec3 &  Normalize()                 { return *this /= GetLength(); }
 
-  bool    operator == (Vec3 const &v) { return (x == v.x) && (y == v.y) && (z += v.z); }
+  bool    operator == (Vec3 const &v) { return (x == v.x) && (y == v.y) && (z == v.z); }
   Vec3 &  operator += (Vec3 const &v) { x += v.x;  y += v.y; z += v.z; return *this; }
   Vec3 &  operator -= (Vec3 const &v) { x -= v.x;  y -= v.y; z -= v.z; return *this; }
   Vec3 &  operator *= (double s)      { x *= s;  y *= s; z *= s; return *this; }

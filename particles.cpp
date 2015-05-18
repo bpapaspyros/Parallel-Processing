@@ -38,7 +38,7 @@ void ProcessCollisions2(void);        // processes collision concerning the doma
 void AdvanceParticles(void);          // after having computed all the necessary values, move the particles
 void InitSim(char const *fileName);   // initializes the simulation
 void SaveFile(char const *fileName);  // writes the results in a file
-inline int GetNeighborCells(int ci, int cj, int ck, int *neighCells);  // gets the indexes of the neighbours in an array
+static inline int GetNeighborCells(int ci, int cj, int ck, int *neighCells);  // gets the indexes of the neighbours in an array
 
 
 //Uncomment to add code to check that Courant–Friedrichs–Lewy condition is satisfied at runtime
@@ -573,7 +573,7 @@ void RebuildGrid()
  * @param Grid coordinates of the cell (ci, cj, ck), neighCells
  * which is the array that will hold the neighbours' indexes
  */
-inline int GetNeighborCells(int ci, int cj, int ck, int *neighCells)
+static inline int GetNeighborCells(int ci, int cj, int ck, int *neighCells)
 {
   // counter for the neighbour cells
   int numNeighCells = 0;
@@ -1550,7 +1550,7 @@ void AdvanceFrame()
       stddev = 0.0;
     }
 
-    #pragma omp for schedule(static)
+    #pragma omp for schedule(static, 2)
     for(i=0; i<numCells; ++i) {
       #pragma omp atomic
       stddev += (mean-cnumPars[i])*(mean-cnumPars[i]);
@@ -1603,9 +1603,11 @@ int main(int argc, char *argv[])
   // if no visualization was enabled
 #ifndef ENABLE_VISUALIZATION
 
+b.startT();
   // core of benchmark program (the Region-of-Interest)
   for(int i = 0; i < framenum; ++i)
     AdvanceFrame();
+b.stopNprint();
 
   // else render the new data
 #else
@@ -1618,7 +1620,6 @@ int main(int argc, char *argv[])
 
   // cleaning up memory allocations
   CleanUpSim();
-
   return 0;
 }
 

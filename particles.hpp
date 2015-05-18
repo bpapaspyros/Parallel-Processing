@@ -4,6 +4,10 @@
 #ifndef __PARTICLES_HPP__
 #define __PARTICLES_HPP__ 1
 
+#ifdef __SSE2__
+#include <emmintrin.h>
+#endif
+
 #include <stddef.h>
 #if defined(WIN32)
 typedef __int64 int64_t;
@@ -57,6 +61,268 @@ static inline int bswap_int32(int x) {
 }
 
 
+#if 1
+class Vec3
+{
+public:
+  __m128d _xy, _z0;
+  double x, y, z;
+
+  Vec3() {}
+  Vec3(double _x, double _y, double _z) : x(_x), y(_y), z(_z) {
+    // loading data on the registers
+    _xy = _mm_set_pd( _y, _x);
+    _z0 = _mm_set_pd(0.0, _z);
+  }
+
+  double  GetLengthSq() const         { 
+    // declaring registers for the sse instructions 
+    __m128d pres1, pres2;
+
+    // squaring the contents of the vectors
+    pres1 = _mm_mul_pd(_xy, _xy);
+    pres2 = _mm_mul_pd(_z0, _z0);
+
+    // adding the contents of the two vectors
+    pres1 = _mm_add_pd(pres1, pres2);
+
+    // moving y to the top of this register
+    pres2 = _mm_set_pd(0.0, pres1[1]);
+
+    // adding the last number
+    pres1 = _mm_add_pd(pres1, pres2);
+
+    // adding the two halves of the vector
+    return pres1[0];
+  }
+
+  double  GetLength() const           { 
+    // loading the array to a register
+    __m128d res = _mm_set_pd(0.0, GetLengthSq());
+
+    // calculating the square root
+    res = _mm_sqrt_pd(res);
+  
+    return res[0];
+  }
+
+  Vec3 &  Normalize()                 { 
+    return *this /= GetLength(); 
+  }
+
+  bool    operator == (Vec3 const &v) { 
+    return (x == v.x) && (y == v.y) && (z += v.z);  
+  }
+
+  Vec3 &  operator += (Vec3 const &v) { 
+    // loading our variables to the registers
+    __m128d _xy = _mm_set_pd(y, x);
+    __m128d _z0 = _mm_set_pd(0, z);
+
+    // loading the s to the registers
+    __m128d v1 = _mm_set_pd(v.y, v.x);
+    __m128d v2 = _mm_set_pd(  0, v.z);
+
+    // z += v.x
+    z = (double)(_mm_add_pd(_z0, v2)[0]);
+
+    // [x y] += [s s]
+    v1 = _mm_add_pd(_xy, v1);
+
+    // get the results to the class variables
+    x = v1[0]; y = v1[1];
+
+    return *this; 
+  }
+
+  Vec3 &  operator -= (Vec3 const &v) { 
+    // loading our variables to the registers
+    __m128d _xy = _mm_set_pd(y, x);
+    __m128d _z0 = _mm_set_pd(0, z);
+
+    // loading the s to the registers
+    __m128d v1 = _mm_set_pd(v.y, v.x);
+    __m128d v2 = _mm_set_pd(  0, v.z);
+
+    // z -= v.x
+    z = (double)(_mm_sub_pd(_z0, v2)[0]);
+
+    // [x y] -= [s s]
+    v1 = _mm_sub_pd(_xy, v1);
+
+    // get the results to the class variables
+    x = v1[0]; y = v1[1];
+
+    return *this; 
+  }
+
+  Vec3 &  operator *= (double s)      { 
+    // loading our variables to the registers
+    __m128d _xy = _mm_set_pd(y, x);
+    __m128d _z0 = _mm_set_pd(0, z);
+
+    // loading the s to the registers
+    __m128d m = _mm_set_pd(s, s);
+
+    // z *= s
+    z = (double)(_mm_mul_pd(_z0, m)[0]);
+
+    // [x y] * [s s]
+    m = _mm_mul_pd(_xy, m);
+
+    // get the results to the class variables
+    x = m[0]; y = m[1];
+
+    return *this; 
+  }
+
+  Vec3 &  operator /= (double s)      {
+    // loading our variables to the registers
+    __m128d _xy = _mm_set_pd(y, x);
+    __m128d _z0 = _mm_set_pd(0, z);
+
+    // load 2 of the registers with data
+    __m128d _s = _mm_set_pd(s, s);
+    __m128d _ones = _mm_set_pd(1.f, 1.f);
+
+    /* we could avoid contsructing this *
+     * fraction but it is kept for      *
+     * compatibility reasons, regarding *
+     * previous implementations         */
+      // divide them so that we create
+      // the 1/s fraction
+    __m128d pres1 = _mm_div_pd(_ones, _s);
+    __m128d pres2 = pres1;
+    
+    // complete the multiplication
+    pres1 = _mm_mul_pd(_xy, pres1);
+    pres2 = _mm_mul_pd(_z0, pres2);
+
+    // get the results to the class variables
+    x = pres1[0]; y = pres1[1]; z = pres2[0];
+
+    return *this; 
+  }
+
+  Vec3    operator + (Vec3 const &v) const    { 
+    // loading our variables to the registers
+    __m128d _xy = _mm_set_pd(y, x);
+    __m128d _z0 = _mm_set_pd(0, z);
+
+    // load the arrays to the registers
+    __m128d res1 = _mm_set_pd(v.y, v.x);
+    __m128d res2 = _mm_set_pd(  0, v.z);
+
+    // make the additions
+    res1 = _mm_add_pd(_xy, res1);
+    res2 = _mm_add_pd(_z0, res2);
+
+    // return a new object
+    return Vec3(res1[0], res1[1], res2[0]); 
+  }
+  
+  Vec3    operator + (double const &f) const  { 
+    // loading our variables to the registers
+    __m128d _xy = _mm_set_pd(y, x);
+    __m128d _z0 = _mm_set_pd(0, z);
+
+    // load the arrays to the registers
+    __m128d res1 = _mm_set_pd(f, f);
+    __m128d res2 = res1;
+
+    // make the additions
+    res1 = _mm_add_pd(_xy, res1);
+    res2 = _mm_add_pd(_z0, res2);
+
+    // return a new object
+    return Vec3(res1[0], res1[1], res2[0]); 
+  }
+
+  Vec3    operator - () const                 { 
+    return Vec3(-x, -y, -z); 
+  }
+
+  Vec3    operator - (Vec3 const &v) const    { 
+    // loading our variables to the registers
+    __m128d _xy = _mm_set_pd(y, x);
+    __m128d _z0 = _mm_set_pd(0, z);
+
+    // load the arrays to the registers
+    __m128d res1 = _mm_set_pd(v.y, v.x);
+    __m128d res2 = _mm_set_pd(  0, v.z);
+
+    // make the subtractions
+    res1 = _mm_sub_pd(_xy, res1);
+    res2 = _mm_sub_pd(_z0, res2);
+
+    // return a new object
+    return Vec3(res1[0], res1[1], res2[0]); 
+  }
+
+  Vec3    operator * (double s) const         { 
+    // loading our variables to the registers
+    __m128d _xy = _mm_set_pd(y, x);
+    __m128d _z0 = _mm_set_pd(0, z);
+
+    // load the arrays to the registers
+    __m128d res1 = _mm_set_pd(s, s);
+    __m128d res2 = _mm_set_pd(0, s);
+
+    // make the multiplication
+    res1 = _mm_mul_pd(_xy, res1);
+    res2 = _mm_mul_pd(_z0, res2);
+
+    // return a new object
+    return Vec3(res1[0], res1[1], res2[0]);   
+  }
+
+  Vec3    operator / (double s) const         { 
+    // loading our variables to the registers
+    __m128d _xy = _mm_set_pd(y, x);
+    __m128d _z0 = _mm_set_pd(0, z);
+
+    // load 2 of the registers with data
+    __m128d _s = _mm_set_pd(s, s);
+    __m128d _ones = _mm_set_pd(1.f, 1.f);
+
+    /* we could avoid contsructing this *
+     * fraction but it is kept for      *
+     * compatibility reasons, regarding *
+     * previous implementations         */
+      // divide them so that we create
+      // the 1/s fraction
+    __m128d pres1 = _mm_div_pd(_ones, _s);
+    __m128d pres2 = pres1;
+    
+    // complete the multiplication
+    pres1 = _mm_mul_pd(_xy, pres1);
+    pres2 = _mm_mul_pd(_z0, pres2);
+
+    // returning the object
+    return Vec3(pres1[0], pres1[1], pres2[0]); 
+  }
+
+  double  operator * (Vec3 const &v) const    { 
+    // load the arrays to the registers
+    __m128d res1 = _mm_set_pd(v.y, v.x);
+    __m128d res2 = _mm_set_pd(0.0, v.z);
+
+    // make the multiplications
+    res1 = _mm_mul_pd(_xy, res1);
+    res2 = _mm_mul_pd(_z0, res2);
+
+    // add the two vectors (scalar)
+    res1 = _mm_add_pd(res1, res2);
+
+    // move y*v.y to the other register
+    std::swap(res2[0], res1[1]);
+
+    // return the sum
+    return (_mm_add_pd(res1, res2)[0]); 
+  }
+};
+
+#else 
 class Vec3
 {
 public:
@@ -84,8 +350,7 @@ public:
 
   double  operator * (Vec3 const &v) const    { return x*v.x + y*v.y + z*v.z; }
 };
-
-
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 

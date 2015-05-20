@@ -67,6 +67,7 @@ int *cnumPars = 0;            // array of particles
 int *cnumPars2 = 0;           // helper array of particles
 Cell **last_cells = NULL;     // helper array with pointers to last cell structure of "cells" array lists
 omp_lock_t *cell_mutexes = 0; // array of mutexes for future use in race conditions
+__m128d regs[6];              // general purpose registers simd instructions
 
 // visualization initial values
 #ifdef ENABLE_VISUALIZATION
@@ -240,10 +241,29 @@ void InitSim(char const *fileName)
         vz  = bswap_float(vz);
       }
 
-      // assigning grid positions
-      int ci = (int)(((float)px - domainMin.x) / delta.x);
-      int cj = (int)(((float)py - domainMin.y) / delta.y);
-      int ck = (int)(((float)pz - domainMin.z) / delta.z);
+      // calculating the coordinates
+      // loading the registers with values
+      regs[0] = _mm_set_pd(py, px);
+      regs[1] = _mm_set_pd(domainMin.y, domainMin.x);
+      regs[2] = _mm_sub_pd(regs[0], regs[1]);
+      regs[0] = _mm_set_pd(delta.y, delta.x);
+
+      // ci & cj
+      regs[1] = _mm_div_pd(regs[2], regs[0]);
+      int ci = regs[1][0];
+      int cj = regs[1][1];
+
+      // loading values for ck
+      regs[0] = _mm_set_pd(1, pz);
+      regs[1] = _mm_set_pd(1, domainMin.z);
+      regs[2] = _mm_sub_pd(regs[0], regs[1]);
+      regs[0] = _mm_set_pd(1, delta.z);
+
+      // calculating the ck
+      regs[1] = _mm_div_pd(regs[2], regs[0]);
+
+      // ck
+      int ck = regs[1][0];
 
       // checking if the grid positions are valid
       // if they are out of bound then reset them
@@ -253,7 +273,21 @@ void InitSim(char const *fileName)
 
       // calculate the index of the array depending 
       // on its grid position
-      int index = (ck*ny + cj)*nx + ci;
+
+      // loading with values
+      regs[0] = _mm_set_pd(0, ck);
+      regs[1] = _mm_set_pd(0, ny);
+
+        // partial results for (ck*ny + cj)*nx + ci
+      regs[2] = _mm_mul_sd(regs[0], regs[1]);
+      regs[2][1] = cj;
+      regs[0] = _mm_set_pd(nx, nx);
+      regs[1] = _mm_mul_pd(regs[0],regs[2]);
+      regs[2] = _mm_set_pd(0, ci);
+      regs[0] = _mm_add_pd(regs[1],regs[2]);
+
+      // final result
+      int index = regs[0][0] + regs[0][1];
 
       // get the position of this cell in the array
       Cell *cell = &cells[index];
@@ -331,7 +365,9 @@ void SaveFile(char const *fileName)
     file.write((char *)&numParticles, FILE_SIZE_INT);
   }
 
-  int count = 0;
+  // loading values to 2 registers to implement a counter
+  regs[0] = _mm_set_pd(0, 0);
+  regs[1] = _mm_set_pd(0, 1);
 
   // iterate through the cells to write their data to a file
   for(int i = 0; i < numCells; ++i)
@@ -350,25 +386,29 @@ void SaveFile(char const *fileName)
      
       // check if we need to save as big endian
       if(!isLittleEndian()) {
-        px  = bswap_float((float)(cell->p[j % PARTICLES_PER_CELL].x));
-        py  = bswap_float((float)(cell->p[j % PARTICLES_PER_CELL].y));
-        pz  = bswap_float((float)(cell->p[j % PARTICLES_PER_CELL].z));
-        hvx = bswap_float((float)(cell->hv[j % PARTICLES_PER_CELL].x));
-        hvy = bswap_float((float)(cell->hv[j % PARTICLES_PER_CELL].y));
-        hvz = bswap_float((float)(cell->hv[j % PARTICLES_PER_CELL].z));
-        vx  = bswap_float((float)(cell->v[j % PARTICLES_PER_CELL].x));
-        vy  = bswap_float((float)(cell->v[j % PARTICLES_PER_CELL].y));
-        vz  = bswap_float((float)(cell->v[j % PARTICLES_PER_CELL].z));
+        int jpcells = j % PARTICLES_PER_CELL;
+        
+        px  = bswap_float((float)(cell->p[jpcells].x));
+        py  = bswap_float((float)(cell->p[jpcells].y));
+        pz  = bswap_float((float)(cell->p[jpcells].z));
+        hvx = bswap_float((float)(cell->hv[jpcells].x));
+        hvy = bswap_float((float)(cell->hv[jpcells].y));
+        hvz = bswap_float((float)(cell->hv[jpcells].z));
+        vx  = bswap_float((float)(cell->v[jpcells].x));
+        vy  = bswap_float((float)(cell->v[jpcells].y));
+        vz  = bswap_float((float)(cell->v[jpcells].z));
       } else {
-        px  = (float)(cell->p[j % PARTICLES_PER_CELL].x);
-        py  = (float)(cell->p[j % PARTICLES_PER_CELL].y);
-        pz  = (float)(cell->p[j % PARTICLES_PER_CELL].z);
-        hvx = (float)(cell->hv[j % PARTICLES_PER_CELL].x);
-        hvy = (float)(cell->hv[j % PARTICLES_PER_CELL].y);
-        hvz = (float)(cell->hv[j % PARTICLES_PER_CELL].z);
-        vx  = (float)(cell->v[j % PARTICLES_PER_CELL].x);
-        vy  = (float)(cell->v[j % PARTICLES_PER_CELL].y);
-        vz  = (float)(cell->v[j % PARTICLES_PER_CELL].z);
+        int jpcells = j % PARTICLES_PER_CELL;
+
+        px  = (float)(cell->p[jpcells].x);
+        py  = (float)(cell->p[jpcells].y);
+        pz  = (float)(cell->p[jpcells].z);
+        hvx = (float)(cell->hv[jpcells].x);
+        hvy = (float)(cell->hv[jpcells].y);
+        hvz = (float)(cell->hv[jpcells].z);
+        vx  = (float)(cell->v[jpcells].x);
+        vy  = (float)(cell->v[jpcells].y);
+        vz  = (float)(cell->v[jpcells].z);
       }
 
       // write the to the file
@@ -382,14 +422,18 @@ void SaveFile(char const *fileName)
       file.write((char *)&vy,  FILE_SIZE_FLOAT);
       file.write((char *)&vz,  FILE_SIZE_FLOAT);
 
-      ++count;
-
+      // increasing the register-counter
+      regs[0] = _mm_add_sd(regs[0], regs[1]);
+      
       // move pointer to next cell in list if end of array is reached
       if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
         cell = cell->next;
       }
     }
   }
+
+  // assigning the register value to a variable
+  int count = regs[0][0];
 
   // checking if we wrote as many particles as we read
   assert(count == numParticles);
@@ -406,15 +450,15 @@ void CleanUpSim()
   for(int i=0; i<numCells; ++i)
   {
     Cell& cell = cells[i];
-  	
+    
     // iterate to the end of the cell list returning 
     // the cells to the pool
     while(cell.next)
-  	{
-  		Cell *temp = cell.next;
-  		cell.next = temp->next;
-  		cellpool_returncell(&pool, temp);
-  	}
+    {
+      Cell *temp = cell.next;
+      cell.next = temp->next;
+      cellpool_returncell(&pool, temp);
+    }
 
     // destroying locks
     omp_destroy_lock(&cell_mutexes[i]);
@@ -468,7 +512,7 @@ void RebuildGrid()
     last_cells[i] = &cells[i];
   }
 
-  #pragma omp single
+  #pragma omp single private(regs)
   {
     // iterate through source cell lists
     for(int i = 0; i < numCells; ++i)
@@ -482,11 +526,29 @@ void RebuildGrid()
       // iterate through source particles
       for(int j = 0; j < np2; ++j)
       {
+
         // get destination for source particle
-        int ci = (int)((cell2->p[j % PARTICLES_PER_CELL].x - domainMin.x) / delta.x);
-        int cj = (int)((cell2->p[j % PARTICLES_PER_CELL].y - domainMin.y) / delta.y);
-        int ck = (int)((cell2->p[j % PARTICLES_PER_CELL].z - domainMin.z) / delta.z);
-      
+          // load registers with values
+        regs[0] = _mm_set_pd(cell2->p[j % PARTICLES_PER_CELL].y, cell2->p[j % PARTICLES_PER_CELL].x);
+        regs[1] = _mm_set_pd(domainMin.y, domainMin.x);
+        regs[2] = _mm_sub_pd(regs[0],regs[1]);
+        regs[0] = _mm_set_pd(delta.y, delta.x);
+        
+          // ci & cj
+        regs[1] = _mm_div_pd(regs[2],regs[0]);
+        int ci = regs[1][0];
+        int cj = regs[1][1];
+
+        // loading values for the calculation of cks
+        regs[0] = _mm_set_pd(1, cell2->p[j % PARTICLES_PER_CELL].z);
+        regs[1] = _mm_set_pd(1, domainMin.z);
+        regs[2] = _mm_sub_pd(regs[0],regs[1]);
+        regs[0] = _mm_set_pd(1, delta.z);
+
+        // calculation and assignment of ck
+        regs[1] = _mm_div_pd(regs[2], regs[0]);
+        int ck = regs[1][0];
+
           // confine to domain
           // Note, if ProcessCollisions() is working properly these tests are useless
         if(ci < 0) ci = 0; else if(ci >= nx) ci = nx-1;
@@ -521,7 +583,22 @@ void RebuildGrid()
   #endif //ENABLE_CFL_CHECK
 
         // get last pointer in correct destination cell list
-        int index = (ck*ny + cj)*nx + ci;
+          // loading registers with content for the calculation of indexss
+        regs[0] = _mm_set_pd(0, ck);
+        regs[1] = _mm_set_pd(0, ny);
+        regs[2] = _mm_mul_sd(regs[0], regs[1]);
+
+        // partial results for (ck*ny + cj)*nx + ci
+        regs[2][1] = cj;
+        regs[0] = _mm_set_pd(nx, nx);
+        regs[1] = _mm_mul_pd(regs[0],regs[2]);
+        regs[2] = _mm_set_pd(0, ci);
+
+        // adding the partial results and 
+        // storing the register value to the variables
+        regs[0] = _mm_add_pd(regs[1],regs[2]);
+        int index = regs[0][0] + regs[0][1];
+
         Cell *cell = last_cells[index];
         int np = cnumPars[index];
 
@@ -554,7 +631,6 @@ void RebuildGrid()
             cellpool_returncell(&pool, temp);
           }
         }
-
       } // j
 
       // return cells to pool that are not statically allocated head of lists
@@ -577,9 +653,26 @@ static inline int GetNeighborCells(int ci, int cj, int ck, int *neighCells)
 {
   // counter for the neighbour cells
   int numNeighCells = 0;
+  
+  // local registers for this variable
+  __m128d lreg1, lreg2, lreg3;
 
-  // have the nearest particles first -> help branch prediction
-  int my_index = (ck*ny + cj)*nx + ci;  // getting my cell's index
+  // partial results for the computation of
+  // (ck*ny + cj)*nx + ci
+  lreg1 = _mm_set_pd(0, ck);
+  lreg2 = _mm_set_pd(0, ny);
+  lreg3 = _mm_mul_sd(lreg1, lreg2);
+
+  lreg3[1] = cj;
+  lreg1 = _mm_set_pd(nx, nx);
+  lreg2 = _mm_mul_pd(lreg1,lreg3);
+
+  lreg3 = _mm_set_pd(0, ci);
+  lreg1 = _mm_add_pd(lreg2,lreg3);
+
+  // assignment of the calculation to my_index
+  int my_index = lreg1[0] + lreg1[1];
+
   neighCells[numNeighCells] = my_index; // setting itself as a neighbour
   ++numNeighCells;                      // increasing the counter
 
@@ -622,9 +715,6 @@ static inline int GetNeighborCells(int ci, int cj, int ck, int *neighCells)
  */
 void ComputeForces()
 {
-    // general purpose registers simd instructions
-    __m128d regs[3];
-
     // initialize arrays, so that they are ready 
     // for updating 
     #pragma omp for schedule(static)
@@ -825,16 +915,23 @@ void ComputeForces()
         }
     }// i
 
-    #pragma omp for ordered schedule(static) 
+    #pragma omp for ordered schedule(static) private(regs)
     for(int cindex=0; cindex<(nz*ny*nx); ++cindex)
     {
         // array of neigbours (counts them)
         int neighCells[27];
 
+        // setting the registers
+        regs[0] = _mm_set_pd(0, (double)nx);
+        regs[1] = _mm_set_pd(0, (double)ny);
+
+        // making the multiplications
+        regs[0] = _mm_mul_pd(regs[0], regs[1]);
+
         // grid coordinates
-        int ck = ( cindex-cindex % (nx*ny) ) / (ny*nx);
-        int cj = ( (cindex-cindex%nx) / nx ) % ny;
+        int ck = ( cindex-cindex % (int)regs[0][0]) / (int)regs[0][0];
         int ci = cindex % nx;
+        int cj = ( (cindex-ci) / nx ) % ny;
 
         // number of particles for this cell
         int np = cnumPars[cindex];
@@ -947,8 +1044,8 @@ void ComputeForces()
 void ProcessCollisions()
 {
   #pragma omp for schedule(static)
-	for(int i = 0; i < numCells; ++i)
-	{
+  for(int i = 0; i < numCells; ++i)
+  {
         Cell *cell = &cells[i];
         int np = cnumPars[i];
 
@@ -983,8 +1080,8 @@ void ProcessCollisions()
           //move pointer to next cell in list if end of array is reached
           if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
             cell = cell->next;
-		}
-	}
+    }
+  }
 }
 #else
 // Notes on USE_ImpeneratableWall
@@ -1007,7 +1104,7 @@ void ProcessCollisions()
   int x,y,z;
 
   // splitting the parallel region to independent sections
-  #pragma omp sections
+  #pragma omp sections private(regs)
   { 
       #pragma omp section
       { 
@@ -1034,9 +1131,19 @@ void ProcessCollisions()
                       // getting particle position in the cell
                       int ji = j % PARTICLES_PER_CELL;
 
-                      // calculating the new position and the distance
-                      float pos_x = cell->p[ji].x + cell->hv[ji].x * timeStep;
-                      float diff = parSize - (pos_x - domainMin.x);
+                      // calculating the new position and the distance                      
+                      regs[0] = _mm_set_pd(cell->hv[ji].x, cell->p[ji].x );
+                      regs[1] = _mm_set_pd((float)timeStep, 1);
+                      regs[1] = _mm_mul_pd(regs[0],regs[1]);
+                      float pos_x = regs[1][0] + regs[1][1];
+
+                      // calculating the differnce between the
+                      // previous position
+                      regs[0] = _mm_set_pd(parSize, domainMin.x);
+                      regs[1] = _mm_set_pd(-pos_x, 0);
+                      regs[1] = _mm_add_pd(regs[0],regs[1]);
+
+                      float diff =  regs[1][0] + regs[1][1];
 
                       // checking the tollerance
                       if(diff > epsilon) {
@@ -1077,8 +1184,18 @@ void ProcessCollisions()
                       int ji = j % PARTICLES_PER_CELL;
 
                       // calculating the new position and the distance
-                      float pos_x = cell->p[ji].x + cell->hv[ji].x * timeStep;
-                      float diff = parSize - (domainMax.x - pos_x);
+                      regs[0] = _mm_set_pd(cell->hv[ji].x, cell->p[ji].x );
+                      regs[1] = _mm_set_pd((float)timeStep, 1);
+                      regs[1] = _mm_mul_pd(regs[0],regs[1]);
+                      float pos_x = regs[1][0] + regs[1][1];
+
+                      // calculating the differnce between the
+                      // previous position
+                      regs[0] = _mm_set_pd(parSize, -domainMax.x);
+                      regs[1] = _mm_set_pd(pos_x, 0);
+                      regs[1] = _mm_add_pd(regs[0],regs[1]);
+
+                      float diff =  regs[1][0] + regs[1][1];
 
                       // checking the tollerance
                       if(diff > epsilon) {
@@ -1119,8 +1236,18 @@ void ProcessCollisions()
                       int ji = j % PARTICLES_PER_CELL;
 
                       // calculating the new position and the distance
-                      float pos_y = cell->p[ji].y + cell->hv[ji].y * timeStep;
-                      float diff = parSize - (pos_y - domainMin.y);
+                      regs[0] = _mm_set_pd(cell->hv[ji].y, cell->p[ji].y );
+                      regs[1] = _mm_set_pd((float)timeStep, 1);
+                      regs[1] = _mm_mul_pd(regs[0],regs[1]);
+                      float pos_y = regs[1][0] + regs[1][1];
+
+                      // calculating the differnce between the
+                      // previous position
+                      regs[0] = _mm_set_pd(parSize, domainMin.y);
+                      regs[1] = _mm_set_pd(-pos_y, 0);
+                      regs[1] = _mm_add_pd(regs[0],regs[1]);
+
+                      float diff =  regs[1][0] + regs[1][1];
 
                       // checking the tollerance
                       if(diff > epsilon) {
@@ -1161,8 +1288,18 @@ void ProcessCollisions()
                       int ji = j % PARTICLES_PER_CELL;
                       
                       // calculating the new position and the distance
-                      float pos_y = cell->p[ji].y + cell->hv[ji].y * timeStep;
-                      float diff = parSize - (domainMax.y - pos_y);
+                      regs[0] = _mm_set_pd(cell->hv[ji].y, cell->p[ji].y );
+                      regs[1] = _mm_set_pd((float)timeStep, 1);
+                      regs[1] = _mm_mul_pd(regs[0],regs[1]);
+                      float pos_y = regs[1][0] + regs[1][1];
+
+                      // calculating the differnce between the
+                      // previous position
+                      regs[0] = _mm_set_pd(parSize, -domainMax.y);
+                      regs[1] = _mm_set_pd(pos_y, 0);
+                      regs[1] = _mm_add_pd(regs[0],regs[1]);
+
+                      float diff =  regs[1][0] + regs[1][1];
 
                       // checking the tollerance
                       if(diff > epsilon) {
@@ -1202,8 +1339,18 @@ void ProcessCollisions()
                       int ji = j % PARTICLES_PER_CELL;
 
                       // calculating the new position and the distance
-                      float pos_z = cell->p[ji].z + cell->hv[ji].z * timeStep;
-                      float diff = parSize - (pos_z - domainMin.z);
+                      regs[0] = _mm_set_pd(cell->hv[ji].z, cell->p[ji].z );
+                      regs[1] = _mm_set_pd((float)timeStep, 1);
+                      regs[1] = _mm_mul_pd(regs[0],regs[1]);
+                      float pos_z = regs[1][0] + regs[1][1];
+
+                      // calculating the differnce between the
+                      // previous position
+                      regs[0] = _mm_set_pd(parSize, domainMin.z);
+                      regs[1] = _mm_set_pd(-pos_z, 0);
+                      regs[1] = _mm_add_pd(regs[0],regs[1]);
+
+                      float diff =  regs[1][0] + regs[1][1];                      
 
                       // checking the tollerance
                       if(diff > epsilon) {
@@ -1244,8 +1391,18 @@ void ProcessCollisions()
                       int ji = j % PARTICLES_PER_CELL;
                       
                       // calculating the new position and the distance
-                      float pos_z = cell->p[ji].z + cell->hv[ji].z * timeStep;
-                      float diff = parSize - (domainMax.z - pos_z);
+                      regs[0] = _mm_set_pd(cell->hv[ji].z, cell->p[ji].z );
+                      regs[1] = _mm_set_pd((float)timeStep, 1);
+                      regs[1] = _mm_mul_pd(regs[0],regs[1]);
+                      float pos_z = regs[1][0] + regs[1][1];
+
+                      // calculating the differnce between the
+                      // previous position
+                      regs[0] = _mm_set_pd(parSize, -domainMax.z);
+                      regs[1] = _mm_set_pd(pos_z, 0);
+                      regs[1] = _mm_add_pd(regs[0],regs[1]);
+
+                      float diff =  regs[1][0] + regs[1][1];
 
                       // checking the tollerance
                       if(diff > epsilon) {
@@ -1272,102 +1429,39 @@ void ProcessCollisions()
  */
 void ProcessCollisions2()
 {
-	int x,y,z;
+  int x,y,z;
 
-  #pragma omp sections
+  #pragma omp sections private(regs)
   {
       #pragma omp section
       {
-        	x=0;	// along the domainMin.x wall
-        	for(y=0; y<ny; ++y)
-        	{
-          		for(z=0; z<nz; ++z)
-          		{
-                  // calculating the corresponding index
-                  int ci = (z*ny + y)*nx + x;
-
-                  // getting a pointer to this cell
-                  Cell *cell = &cells[ci];
-
-                  // getting the number of particles
-                  int np = cnumPars[ci];
-
-                  // iterating for all the particles
-            			for(int j = 0; j < np; ++j)
-            			{
-                      // getting particle position in the cell 
-              				int ji = j % PARTICLES_PER_CELL;
-
-                      // calculating the distance between the cell and the domainMin
-              				float diff = cell->p[ji].x - domainMin.x;
-
-                      // checking if we hit a wall so that we reflect
-                      // the particle by setting the oposite speeds
-              				if(diff < Zero) {
-              					cell->p[ji].x = domainMin.x - diff;
-              					cell->v[ji].x = -cell->v[ji].x;
-              					cell->hv[ji].x = -cell->hv[ji].x;
-              				}
-
-              				// move pointer to next cell in list if end of array is reached
-              				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
-              					cell = cell->next;
-                      }
-            			}// j
-          		}// z
-        	}// y
-      }// section
-
-      #pragma omp section
-      {
-        	x=nx-1;	// along the domainMax.x wall
-        	for(y=0; y<ny; ++y)
-        	{
-          		for(z=0; z<nz; ++z)
-          		{
-                  // calculating the corresponding index
-                  int ci = (z*ny + y)*nx + x;
-
-                  // getting a pointer to this cell
-                  Cell *cell = &cells[ci];
-
-                  // getting the number of particles
-                  int np = cnumPars[ci];
-
-                  // iterating for all the particles
-            			for(int j = 0; j < np; ++j)
-            			{
-                      // getting particle position in the cell
-              				int ji = j % PARTICLES_PER_CELL;
-
-                      // calculating the distance between the cell and the domainMin
-              				float diff = domainMax.x - cell->p[ji].x;
-
-                      // checking if we hit a wall so that we reflect
-                      // the particle by setting the oposite speeds
-              				if(diff < Zero) {
-              					cell->p[ji].x = domainMax.x + diff;
-              					cell->v[ji].x = -cell->v[ji].x;
-              					cell->hv[ji].x = -cell->hv[ji].x;
-              				}
-
-              				// move pointer to next cell in list if end of array is reached
-              				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-              					cell = cell->next;
-            			}// j
-          		}// z
-        	}// y
-      }// section
-    	
-      #pragma omp section
-      {
-          y=0;	// along the domainMin.y wall
-        	for(x=0; x<nx; ++x)
+          x=0;  // along the domainMin.x wall
+          for(y=0; y<ny; ++y)
           {
-            	for(z=0; z<nz; ++z)
-            	{
+              for(z=0; z<nz; ++z)
+              {
+                  // loading the registers with values
+                  regs[0] = _mm_set_pd(0,   z);
+                  regs[1] = _mm_set_pd(0,  ny);
+                  regs[2] = _mm_set_pd(0,   y);
+                  regs[3] = _mm_set_pd(0,  nx);
+
+                  // calculating z*ny*nx
+                  regs[0] = _mm_mul_pd(regs[0], regs[1]);
+                  regs[0] = _mm_mul_pd(regs[0], regs[3]);
+
+                  // calcylating y*nx
+                  regs[1] = _mm_mul_pd(regs[2], regs[3]);
+
+                  // loading x in a register
+                  regs[2] = _mm_set_pd(0, x);
+
+                  // calculating the ci by adding the above values
+                  regs[0] = _mm_add_pd(regs[0], regs[1]);
+                  regs[0] = _mm_add_pd(regs[0], regs[2]);
+
                   // calculating the corresponding index
-                  int ci = (z*ny + y)*nx + x;
+                  int ci = regs[0][0];
 
                   // getting a pointer to this cell
                   Cell *cell = &cells[ci];
@@ -1376,39 +1470,135 @@ void ProcessCollisions2()
                   int np = cnumPars[ci];
 
                   // iterating for all the particles
-            			for(int j = 0; j < np; ++j)
-            			{
-                      // getting particle position in the cell
-              				int ji = j % PARTICLES_PER_CELL;
+                  for(int j = 0; j < np; ++j)
+                  {
+                      // getting particle position in the cell 
+                      int ji = j % PARTICLES_PER_CELL;
+
+                      // loading registers with content
+                      regs[0] = _mm_set_pd(0, cell->p[ji].x);
+                      regs[1] = _mm_set_pd(0, domainMin.x);
 
                       // calculating the distance between the cell and the domainMin
-              				float diff = cell->p[ji].y - domainMin.y;
+                      float diff = (_mm_sub_sd(regs[0], regs[1]))[0];
 
                       // checking if we hit a wall so that we reflect
                       // the particle by setting the oposite speeds
-              				if(diff < Zero) {
-              					cell->p[ji].y = domainMin.y - diff;
-              					cell->v[ji].y = -cell->v[ji].y;
-              					cell->hv[ji].y = -cell->hv[ji].y;
-              				}
+                      if(diff < Zero) {
+                        // subtracting
+                        regs[0] = _mm_set_pd(0, diff);
 
-              				// move pointer to next cell in list if end of array is reached
-              				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-              					cell = cell->next;
-            			}// j
-            	}// z
-        	 }// x
+                        cell->p[ji].x = (_mm_sub_sd(regs[1], regs[0]))[0];
+                        cell->v[ji].x = -cell->v[ji].x;
+                        cell->hv[ji].x = -cell->hv[ji].x;
+                      }
+
+                      // move pointer to next cell in list if end of array is reached
+                      if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
+                        cell = cell->next;
+                      }
+                  }// j
+              }// z
+          }// y
       }// section
 
       #pragma omp section
       {
-          y=ny-1;	// along the domainMax.y wall
+          x=nx-1; // along the domainMax.x wall
+          for(y=0; y<ny; ++y)
+          {
+              for(z=0; z<nz; ++z)
+              {
+                  // loading the registers with values
+                  regs[0] = _mm_set_pd(0,   z);
+                  regs[1] = _mm_set_pd(0,  ny);
+                  regs[2] = _mm_set_pd(0,   y);
+                  regs[3] = _mm_set_pd(0,  nx);
+
+                  // calculating z*ny*nx
+                  regs[0] = _mm_mul_pd(regs[0], regs[1]);
+                  regs[0] = _mm_mul_pd(regs[0], regs[3]);
+
+                  // calcylating y*nx
+                  regs[1] = _mm_mul_pd(regs[2], regs[3]);
+
+                  // loading x in a register
+                  regs[2] = _mm_set_pd(0, x);
+
+                  // calculating the ci by adding the above values
+                  regs[0] = _mm_add_pd(regs[0], regs[1]);
+                  regs[0] = _mm_add_pd(regs[0], regs[2]);
+
+                  // calculating the corresponding index
+                  int ci = regs[0][0];
+
+                  // getting a pointer to this cell
+                  Cell *cell = &cells[ci];
+
+                  // getting the number of particles
+                  int np = cnumPars[ci];
+
+                  // iterating for all the particles
+                  for(int j = 0; j < np; ++j)
+                  {
+                      // getting particle position in the cell
+                      int ji = j % PARTICLES_PER_CELL;
+
+                      // loading registers with content
+                      regs[0] = _mm_set_pd(0, cell->p[ji].x);
+                      regs[1] = _mm_set_pd(0, domainMax.x);
+
+                      // calculating the distance between the cell and the domainMin
+                      float diff = (_mm_sub_sd(regs[1], regs[0]))[0];
+
+                      // checking if we hit a wall so that we reflect
+                      // the particle by setting the oposite speeds
+                      if(diff < Zero) {
+                        // adding
+                        regs[0] = _mm_set_pd(0, diff);
+
+                        cell->p[ji].x = (_mm_add_sd(regs[1], regs[0]))[0];
+                        cell->v[ji].x = -cell->v[ji].x;
+                        cell->hv[ji].x = -cell->hv[ji].x;
+                      }
+
+                      // move pointer to next cell in list if end of array is reached
+                      if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
+                        cell = cell->next;
+                  }// j
+              }// z
+          }// y
+      }// section
+      
+      #pragma omp section
+      {
+          y=0;  // along the domainMin.y wall
           for(x=0; x<nx; ++x)
           {
-            	for(z=0; z<nz; ++z)
-            	{
+              for(z=0; z<nz; ++z)
+              {
+                  // loading the registers with values
+                  regs[0] = _mm_set_pd(0,   z);
+                  regs[1] = _mm_set_pd(0,  ny);
+                  regs[2] = _mm_set_pd(0,   y);
+                  regs[3] = _mm_set_pd(0,  nx);
+
+                  // calculating z*ny*nx
+                  regs[0] = _mm_mul_pd(regs[0], regs[1]);
+                  regs[0] = _mm_mul_pd(regs[0], regs[3]);
+
+                  // calcylating y*nx
+                  regs[1] = _mm_mul_pd(regs[2], regs[3]);
+
+                  // loading x in a register
+                  regs[2] = _mm_set_pd(0, x);
+
+                  // calculating the ci by adding the above values
+                  regs[0] = _mm_add_pd(regs[0], regs[1]);
+                  regs[0] = _mm_add_pd(regs[0], regs[2]);
+
                   // calculating the corresponding index
-                  int ci = (z*ny + y)*nx + x;
+                  int ci = regs[0][0];
 
                   // getting a pointer to this cell
                   Cell *cell = &cells[ci];
@@ -1417,39 +1607,134 @@ void ProcessCollisions2()
                   int np = cnumPars[ci];
 
                   // iterating for all the particles
-              		for(int j = 0; j < np; ++j)
-              		{
+                  for(int j = 0; j < np; ++j)
+                  {
                       // getting particle position in the cell
-                			int ji = j % PARTICLES_PER_CELL;
+                      int ji = j % PARTICLES_PER_CELL;
+
+                      // loading registers with content
+                      regs[0] = _mm_set_pd(0, cell->p[ji].y);
+                      regs[1] = _mm_set_pd(0, domainMin.y);
 
                       // calculating the distance between the cell and the domainMin
-                			float diff = domainMax.y - cell->p[ji].y;
+                      float diff = (_mm_sub_sd(regs[0], regs[1]))[0];
 
                       // checking if we hit a wall so that we reflect
                       // the particle by setting the oposite speeds
-                			if(diff < Zero) {
-                				cell->p[ji].y = domainMax.y + diff;
-                				cell->v[ji].y = -cell->v[ji].y;
-                				cell->hv[ji].y = -cell->hv[ji].y;                          
+                      if(diff < Zero) {
+                        // subtracting
+                        regs[0] = _mm_set_pd(0, diff);
+
+                        cell->p[ji].y = (_mm_sub_sd(regs[1], regs[0]))[0];
+                        cell->v[ji].y = -cell->v[ji].y;
+                        cell->hv[ji].y = -cell->hv[ji].y;
                       }
 
-                			// move pointer to next cell in list if end of array is reached
-                			if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-                				cell = cell->next;
-              		}// j
-            	}// z
+                      // move pointer to next cell in list if end of array is reached
+                      if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
+                        cell = cell->next;
+                  }// j
+              }// z
+           }// x
+      }// section
+
+      #pragma omp section
+      {
+          y=ny-1; // along the domainMax.y wall
+          for(x=0; x<nx; ++x)
+          {
+              for(z=0; z<nz; ++z)
+              {
+                  // loading the registers with values
+                  regs[0] = _mm_set_pd(0,   z);
+                  regs[1] = _mm_set_pd(0,  ny);
+                  regs[2] = _mm_set_pd(0,   y);
+                  regs[3] = _mm_set_pd(0,  nx);
+
+                  // calculating z*ny*nx
+                  regs[0] = _mm_mul_pd(regs[0], regs[1]);
+                  regs[0] = _mm_mul_pd(regs[0], regs[3]);
+
+                  // calcylating y*nx
+                  regs[1] = _mm_mul_pd(regs[2], regs[3]);
+
+                  // loading x in a register
+                  regs[2] = _mm_set_pd(0, x);
+
+                  // calculating the ci by adding the above values
+                  regs[0] = _mm_add_pd(regs[0], regs[1]);
+                  regs[0] = _mm_add_pd(regs[0], regs[2]);
+
+                  // calculating the corresponding index
+                  int ci = regs[0][0];
+
+                  // getting a pointer to this cell
+                  Cell *cell = &cells[ci];
+
+                  // getting the number of particles
+                  int np = cnumPars[ci];
+
+                  // iterating for all the particles
+                  for(int j = 0; j < np; ++j)
+                  {
+                      // getting particle position in the cell
+                      int ji = j % PARTICLES_PER_CELL;
+
+                      // loading registers with content
+                      regs[0] = _mm_set_pd(0, cell->p[ji].y);
+                      regs[1] = _mm_set_pd(0, domainMax.y);
+
+                      // calculating the distance between the cell and the domainMin
+                      float diff = (_mm_sub_sd(regs[1], regs[0]))[0];
+
+                      // checking if we hit a wall so that we reflect
+                      // the particle by setting the oposite speeds
+                      if(diff < Zero) {
+                        // adding
+                        regs[0] = _mm_set_pd(0, diff);
+
+                        cell->p[ji].y = (_mm_sub_sd(regs[1], regs[0]))[0];
+                        cell->v[ji].y = -cell->v[ji].y;
+                        cell->hv[ji].y = -cell->hv[ji].y;                          
+                      }
+
+                      // move pointer to next cell in list if end of array is reached
+                      if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
+                        cell = cell->next;
+                  }// j
+              }// z
           }// x
       }// section
 
       #pragma omp section
       {
-        	z=0;	// along the domainMin.z wall
-        	for(x=0; x<nx; ++x)
-        	{
-          		for(y=0; y<ny; ++y)
-          		{
+          z=0;  // along the domainMin.z wall
+          for(x=0; x<nx; ++x)
+          {
+              for(y=0; y<ny; ++y)
+              {
+                  // loading the registers with values
+                  regs[0] = _mm_set_pd(0,   z);
+                  regs[1] = _mm_set_pd(0,  ny);
+                  regs[2] = _mm_set_pd(0,   y);
+                  regs[3] = _mm_set_pd(0,  nx);
+
+                  // calculating z*ny*nx
+                  regs[0] = _mm_mul_pd(regs[0], regs[1]);
+                  regs[0] = _mm_mul_pd(regs[0], regs[3]);
+
+                  // calcylating y*nx
+                  regs[1] = _mm_mul_pd(regs[2], regs[3]);
+
+                  // loading x in a register
+                  regs[2] = _mm_set_pd(0, x);
+
+                  // calculating the ci by adding the above values
+                  regs[0] = _mm_add_pd(regs[0], regs[1]);
+                  regs[0] = _mm_add_pd(regs[0], regs[2]);
+
                   // calculating the corresponding index
-                  int ci = (z*ny + y)*nx + x;
+                  int ci = regs[0][0];
 
                   // getting a pointer to this cell
                   Cell *cell = &cells[ci];
@@ -1458,39 +1743,66 @@ void ProcessCollisions2()
                   int np = cnumPars[ci];
 
                   // iterating for all the particles
-            			for(int j = 0; j < np; ++j)
-            			{
+                  for(int j = 0; j < np; ++j)
+                  {
                       // getting particle position in the cell
-              				int ji = j % PARTICLES_PER_CELL;
+                      int ji = j % PARTICLES_PER_CELL;
+
+                      // loading registers with content
+                      regs[0] = _mm_set_pd(0, cell->p[ji].z);
+                      regs[1] = _mm_set_pd(0, domainMin.z);
 
                       // calculating the distance between the cell and the domainMin
-              				float diff = cell->p[ji].z - domainMin.z;
+                      float diff = (_mm_sub_sd(regs[0], regs[1]))[0];
 
                       // checking if we hit a wall so that we reflect
                       // the particle by setting the oposite speeds
-              				if(diff < Zero) {
-              					cell->p[ji].z = domainMin.z - diff;
-              					cell->v[ji].z = -cell->v[ji].z;
-              					cell->hv[ji].z = -cell->hv[ji].z;
-              				}
+                      if(diff < Zero) {
+                        // subtracting
+                        regs[0] = _mm_set_pd(0, diff);
 
-              				// move pointer to next cell in list if end of array is reached
-              				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-              					cell = cell->next;
-            			}// j
-          		}// y
-        	}// x
+                        cell->p[ji].z = (_mm_sub_sd(regs[1], regs[0]))[0];
+                        cell->v[ji].z = -cell->v[ji].z;
+                        cell->hv[ji].z = -cell->hv[ji].z;
+                      }
+
+                      // move pointer to next cell in list if end of array is reached
+                      if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
+                        cell = cell->next;
+                  }// j
+              }// y
+          }// x
       }// section
 
       #pragma omp section
       {
-        	z=nz-1;	// along the domainMax.z wall
-        	for(x=0; x<nx; ++x)
-        	{
-          		for(y=0; y<ny; ++y)
-          		{
+          z=nz-1; // along the domainMax.z wall
+          for(x=0; x<nx; ++x)
+          {
+              for(y=0; y<ny; ++y)
+              {
+                  // loading the registers with values
+                  regs[0] = _mm_set_pd(0,   z);
+                  regs[1] = _mm_set_pd(0,  ny);
+                  regs[2] = _mm_set_pd(0,   y);
+                  regs[3] = _mm_set_pd(0,  nx);
+
+                  // calculating z*ny*nx
+                  regs[0] = _mm_mul_pd(regs[0], regs[1]);
+                  regs[0] = _mm_mul_pd(regs[0], regs[3]);
+
+                  // calcylating y*nx
+                  regs[1] = _mm_mul_pd(regs[2], regs[3]);
+
+                  // loading x in a register
+                  regs[2] = _mm_set_pd(0, x);
+
+                  // calculating the ci by adding the above values
+                  regs[0] = _mm_add_pd(regs[0], regs[1]);
+                  regs[0] = _mm_add_pd(regs[0], regs[2]);
+
                   // calculating the corresponding index
-                  int ci = (z*ny + y)*nx + x;
+                  int ci = regs[0][0];
 
                   // getting a pointer to this cell
                   Cell *cell = &cells[ci];
@@ -1499,28 +1811,35 @@ void ProcessCollisions2()
                   int np = cnumPars[ci];
 
                   // iterating for all the particles
-            			for(int j = 0; j < np; ++j)
-            			{
+                  for(int j = 0; j < np; ++j)
+                  {
                       // getting particle position in the cell
-              				int ji = j % PARTICLES_PER_CELL;
+                      int ji = j % PARTICLES_PER_CELL;
+
+                      // loading registers with content
+                      regs[0] = _mm_set_pd(0, cell->p[ji].z);
+                      regs[1] = _mm_set_pd(0, domainMax.z);
 
                       // calculating the distance between the cell and the domainMin
-              				float diff = domainMax.z - cell->p[ji].z;
+                      float diff = (_mm_sub_sd(regs[1], regs[0]))[0];
 
                       // checking if we hit a wall so that we reflect
                       // the particle by setting the oposite speeds
-              				if(diff < Zero) {
-              					cell->p[ji].z = domainMax.z + diff;
-              					cell->v[ji].z = -cell->v[ji].z;
-              					cell->hv[ji].z = -cell->hv[ji].z;
-              				}
+                      if(diff < Zero) {
+                        // adding
+                        regs[0] = _mm_set_pd(0, diff);
 
-              				// move pointer to next cell in list if end of array is reached
-              				if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
-              					cell = cell->next;
-            			}// j
-          		}// y
-        	}// x
+                        cell->p[ji].z = (_mm_add_sd(regs[1], regs[0]))[0];
+                        cell->v[ji].z = -cell->v[ji].z;
+                        cell->hv[ji].z = -cell->hv[ji].z;
+                      }
+
+                      // move pointer to next cell in list if end of array is reached
+                      if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1)
+                        cell = cell->next;
+                  }// j
+              }// y
+          }// x
       }// section
   }// sections
 }// ProcessCollisions2
@@ -1540,7 +1859,7 @@ void AdvanceParticles()
 
   // iterating through the cells
   // moving them accordingly
-  #pragma omp for schedule(static, 2) private(cell, np, j)
+  #pragma omp for schedule(static, 2) private(cell, np, j, regs)
   for(int i = 0; i < numCells; ++i)
   {
     cell = &cells[i];
@@ -1548,23 +1867,77 @@ void AdvanceParticles()
 
     for(j = 0; j < np; ++j)
     {
-      // computing the new velocity
-      Vec3 v_half = cell->hv[j % PARTICLES_PER_CELL] + cell->a[j % PARTICLES_PER_CELL]*timeStep;
+      int jpcells = j % PARTICLES_PER_CELL;
+      
+      // store the timestep value in a register
+      __m128d ts = _mm_set_pd(timeStep, timeStep);
+      
+      // loading 2 registers with the hv array values
+      regs[0] = _mm_set_pd(cell->hv[jpcells].y, cell->hv[jpcells].x);
+      regs[1] = _mm_set_pd(                  0, cell->hv[jpcells].z);
+
+      // loading 2 registers with the a array values
+      regs[2] = _mm_set_pd(cell->a[jpcells].y, cell->a[jpcells].x);
+      regs[3] = _mm_set_pd(                 0, cell->a[jpcells].z);
+
+      // constructing the v_half values in 2 registers
+        // first multiplying by timestep
+      regs[2] = _mm_mul_pd(regs[2], ts);
+      regs[3] = _mm_mul_pd(regs[3], ts);
+
+        // then adding to the original hv values
+      regs[0] = _mm_add_pd(regs[0], regs[2]);
+      regs[1] = _mm_add_pd(regs[1], regs[3]);
+
 
 #if defined(USE_ImpeneratableWall)
 #endif
+      // constructing v_half*timestep
+      regs[2] = _mm_mul_pd(regs[0], ts);
+      regs[3] = _mm_mul_pd(regs[1], ts);
 
-      // updating the cell's values (position, velocity, etc)
-      cell->p[j % PARTICLES_PER_CELL] += v_half * timeStep;
-      cell->v[j % PARTICLES_PER_CELL] = cell->hv[j % PARTICLES_PER_CELL] + v_half;
-      cell->v[j % PARTICLES_PER_CELL] *= 0.5;
-      cell->hv[j % PARTICLES_PER_CELL] = v_half;
+      // loading the p array in 2 registers
+      regs[4] = _mm_set_pd(cell->p[jpcells].y, cell->p[jpcells].x);
+      regs[5] = _mm_set_pd(                 0, cell->p[jpcells].z);
+
+      // adding to the p array v_half*timestep
+      regs[4] = _mm_add_pd(regs[4], regs[2]);
+      regs[5] = _mm_add_pd(regs[5], regs[3]);
+
+      // updating the p array
+      cell->p[jpcells].x = regs[4][0];
+      cell->p[jpcells].y = regs[4][1];
+      cell->p[jpcells].z = regs[5][0];
+
+      // loading the hv array in 2 registers
+      regs[2] = _mm_set_pd(cell->hv[jpcells].y, cell->hv[jpcells].x);
+      regs[3] = _mm_set_pd(                  0, cell->hv[jpcells].z);
+
+      // adding v_half to the above registers
+      regs[2] = _mm_add_pd(regs[2], regs[0]);
+      regs[3] = _mm_add_pd(regs[3], regs[1]);
+
+      // loading the multiplication factors in a register
+      regs[4] = _mm_set_pd(0.5, 0.5);
+
+      // multiplying the velocities by 0.5
+      regs[2] = _mm_mul_pd(regs[2], regs[4]);
+      regs[3] = _mm_mul_pd(regs[3], regs[4]);      
+
+      // updating the v array
+      cell->v[jpcells].x = regs[2][0];
+      cell->v[jpcells].y = regs[2][1];
+      cell->v[jpcells].z = regs[3][0];
+
+      // updating the hv array with the v_half values
+      cell->hv[jpcells].x = regs[0][0];
+      cell->hv[jpcells].y = regs[0][1];
+      cell->hv[jpcells].z = regs[1][0];
 
       // move pointer to next cell in list if end of array is reached
       if(j % PARTICLES_PER_CELL == PARTICLES_PER_CELL-1) {
         cell = cell->next;
       }
-
     }// j
   }// i
 }// AdvanceParticles
@@ -1624,6 +1997,7 @@ void AdvanceFrame()
  */
 int main(int argc, char *argv[])
 {
+b.startT();
   // checking argument count and if wrong printing a usage message
   if(argc < 3 || argc >= 5) {
     std::cout << "Usage: " << argv[0] << " <framenum> <.fluid input file> [.fluid output file]" << std::endl;
@@ -1655,11 +2029,9 @@ int main(int argc, char *argv[])
   // if no visualization was enabled
 #ifndef ENABLE_VISUALIZATION
 
-b.startT();
   // core of benchmark program (the Region-of-Interest)
   for(int i = 0; i < framenum; ++i)
     AdvanceFrame();
-b.stopNprint();
 
   // else render the new data
 #else
@@ -1672,6 +2044,8 @@ b.stopNprint();
 
   // cleaning up memory allocations
   CleanUpSim();
+
+b.stopNprint();
   return 0;
 }
 
